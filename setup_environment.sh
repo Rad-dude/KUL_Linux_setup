@@ -188,6 +188,11 @@ DO_ENV_FASTSURFER=1      # needs a GPU to be useful; safe to leave on, just slow
 DO_ENV_PYFMRI=1          # KUL_NIS/share/rsfmri_pipeline + KUL_fmriproc_nilearn_new.sh (both hardcode the 'pyfMRI' env)
 DO_REPOS=1               # clone KUL_NIS/KUL_VBG/KUL_FWT at pinned branches
 DO_ENV_LORE_SD=1         # LoRE-SD (KUL_dwiprep -D run_dwiprep_lore_sd.txt) — regular pip package
+DO_ENV_DICOM=1           # KUL_nii2dcm.py — the NIfTI/PNG -> DICOM step behind KUL_clinical_fmridti.sh -R.
+                         # Without this env the pipeline falls back to plain python3 with a
+                         # warning, which silently breaks the measurable (-q) PACS series: GDCM
+                         # refuses non-integer RescaleSlope/Intercept, so pydicom is required.
+                         # Mirrors KUL_NIS/share/envs/KUL_dicom.yml (the by-hand equivalent).
 DO_MRTRIX3=1
 DO_SHARD_RECON=0         # dwimotioncorrect/mssh2amp — KUL_dwiprep.sh's shard_recon: 1 config
                          # option (motion correction alternative to eddy). External MRtrix3
@@ -237,7 +242,7 @@ NVIDIA_DRIVER_JUST_CHANGED=0
 
 # ── End configuration ─────────────────────────────────────────────────────────
 
-SCRIPT_SECTIONS="apt docker nvidia apptainer vscode miniforge env-dcm2bids clinical-pydeps env-scilpy env-hdbet env-resseg env-hdglio env-karawun env-fastsurfer env-pyfmri env-lore-sd repos mrtrix3 shard-recon ants fsl freesurfer leaddbs-atlases spm12 itksnap psychopy datalad awscli r rstudio afni docker-images bashrc verify"
+SCRIPT_SECTIONS="apt docker nvidia apptainer vscode miniforge env-dcm2bids clinical-pydeps env-scilpy env-hdbet env-resseg env-hdglio env-karawun env-fastsurfer env-pyfmri env-lore-sd env-dicom repos mrtrix3 shard-recon ants fsl freesurfer leaddbs-atlases spm12 itksnap psychopy datalad awscli r rstudio afni docker-images bashrc verify"
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -1477,6 +1482,27 @@ packages installed piecemeal over time)"
     ok "pyfMRI ready — used automatically by KUL_run_rsfMRI_networks.sh and KUL_fmriproc_nilearn_new.sh"
 }
 
+section_env_dicom() {
+    if env_exists KUL_dicom; then
+        ok "conda env 'KUL_dicom' already exists"
+        return
+    fi
+    # pydicom is a hard requirement, not a nicety: SimpleITK/GDCM refuses to write
+    # a non-integer RescaleSlope/Intercept and silently inverse-rescales the pixel
+    # data instead, so -q/--label (the measurable series an ROI on PACS reads in
+    # true units) fail without it.
+    #
+    # KUL_NIS ships an equivalent share/envs/KUL_dicom.yml for creating this by
+    # hand. Keep the two in step if either changes; the package set is small and
+    # deliberately duplicated here so the installer stays self-contained and can
+    # run before (or without) KUL_NIS being cloned.
+    log "Creating 'KUL_dicom' (SimpleITK/Pillow/numpy/pydicom — used by KUL_nii2dcm.py, \
+the NIfTI/PNG -> DICOM step behind KUL_clinical_fmridti.sh -R)"
+    run "$(mamba_bin) create -n KUL_dicom -c conda-forge 'python>=3.10' 'simpleitk>=2.2' \
+'pillow>=9.1' 'numpy>=1.24' 'pydicom>=2.3' -y"
+    ok "KUL_dicom ready — found automatically via \$KUL_DICOM_ENV; override with KUL_clinical_fmridti.sh -m"
+}
+
 # ── 5. Sibling repos, pinned branches ──────────────────────────────────────────
 
 section_repos() {
@@ -2653,6 +2679,7 @@ maybe_run_section env-karawun      DO_ENV_KARAWUN         section_env_karawun
 maybe_run_section env-fastsurfer   DO_ENV_FASTSURFER      section_env_fastsurfer
 maybe_run_section env-pyfmri        DO_ENV_PYFMRI          section_env_pyfmri
 maybe_run_section env-lore-sd      DO_ENV_LORE_SD         section_env_lore_sd
+maybe_run_section env-dicom        DO_ENV_DICOM           section_env_dicom
 maybe_run_section repos            DO_REPOS               section_repos
 maybe_run_section mrtrix3          DO_MRTRIX3             section_mrtrix3
 maybe_run_section shard-recon      DO_SHARD_RECON         section_shard_recon
