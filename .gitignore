@@ -1,0 +1,11 @@
+# This repo can be used as $SOFTWARE_ROOT itself (colocated with the
+# installer) -- everything below is real install output, not source.
+/miniforge3/
+/cache/
+/src/
+/share/
+/tmp/
+/qc_reports/
+/.installed_versions/
+/.condarc
+/failed_run_log.txt

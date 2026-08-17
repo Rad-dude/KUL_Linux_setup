@@ -88,6 +88,21 @@ what `KUL_NIS/share/spm12/*.m` resolves at runtime. MATLAB itself is commercial
 and must be installed and licensed separately; without it, use the MATLAB-free
 GLM engine (`KUL_clinical_fmridti.sh -E nilearn`).
 
+**Known issue, not fixed by this script: `fsleyes` can segfault under remote-desktop
+sessions using software OpenGL rendering** — e.g. observed under NoMachine's default
+virtual-display setup (no GPU passthrough), not under Tailscale/RustDesk in the same
+testing. The actual trigger is Mesa's software rasterizer (`swrast_dri.so`), not the
+remote-desktop protocol itself: FSL's own bundled `libglapi.so.0` (an older Mesa
+build, shipped for portability) can mismatch the system's newer one once rendering
+falls back to software mode. If you hit it, this fixes it:
+```bash
+alias fsleyes='LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libglapi.so.0 fsleyes'
+```
+(adjust the path for your distro/arch if `/usr/lib/x86_64-linux-gnu` doesn't exist).
+Not applied by this script, since it's a workaround for a specific remote-display
+symptom, not something every install needs — worth keeping in your own `~/.bashrc`
+if you use a remote-desktop setup that triggers it.
+
 ## Documentation
 
 - [`SOFTWARE_ROOT_SETUP.md`](SOFTWARE_ROOT_SETUP.md) — directory layout,

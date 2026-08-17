@@ -32,9 +32,42 @@
 #   ./setup_environment.sh --skip docker,fsl     # run everything except these
 #   ./setup_environment.sh --karawun-stock # conda-forge karawun instead of the KUL fork (see below)
 #   ./setup_environment.sh --dry-run       # print what would run, do nothing
+#   ./setup_environment.sh --force-rebuild-mismatched  # non-interactive: auto-build the pinned
+#                                           # version instead of keeping one that doesn't match
+#                                           # (see "Version-pin drift" below)
+#   ./setup_environment.sh --fresh-bashrc  # user mode only: back up ~/.bashrc, then rebuild it
+#                                           # from the distro's stock skeleton (/etc/skel/.bashrc)
+#                                           # plus this script's own managed block, instead of
+#                                           # appending onto whatever ~/.bashrc already has. For a
+#                                           # machine with an unrelated, pre-existing shell config
+#                                           # (a different conda/mamba setup, a different software
+#                                           # root) already sourced in ~/.bashrc -- appending onto
+#                                           # that leaves BOTH active at once, which is exactly the
+#                                           # class of bug this project hit repeatedly during its
+#                                           # own migration (PATH-shadowed compilers/linkers, wrong
+#                                           # tool versions silently picked up). The stock skeleton
+#                                           # is a reasonable starting point for the "cool stuff"
+#                                           # (prompt, aliases, .bash_aliases, completion) most
+#                                           # unmodified ~/.bashrc files still have, but it can't
+#                                           # know about anything YOU specifically added beyond
+#                                           # that -- review the backup and port anything else back
+#                                           # in by hand.
 #
 # Re-run safely after fixing a failure partway through — completed sections
 # are cheap to skip (they check for existing output first).
+#
+# Version-pin drift: every pinned tool this script builds (mrtrix3, ANTs, FSL,
+# scilpy, HD-BET, karawun, hd-glio, ITK-SNAP, PsychoPy, RStudio) is checked
+# against what's ALREADY present, not just whether something with that name
+# exists — a prior install (e.g. a shared /usr/local one already on PATH) that
+# doesn't match the version this script pins is reported, not silently
+# treated as good enough. In a real terminal you're asked keep/build per
+# tool; non-interactively (-y, or run through something that isn't a TTY)
+# the default is to keep what's there and warn loudly, unless
+# --force-rebuild-mismatched says to build the pinned version automatically.
+# Either way, "build" only ever creates a fresh, separate copy under
+# $SOFTWARE_ROOT — the existing install, wherever it lives and whoever owns
+# it, is never deleted or modified.
 #
 # Notable, non-obvious choices this script makes:
 #
@@ -73,6 +106,8 @@ set -euo pipefail
 INSTALL_MODE="${INSTALL_MODE:-user}"
 GROUP_NAME="${GROUP_NAME:-kulusers}"
 ASSUME_YES=0
+FORCE_REBUILD_MISMATCHED=0
+FRESH_BASHRC=0
 ROOT_OVERRIDE=""
 CACHE_ROOT_OVERRIDE=""
 NCPU="${NCPU:-$(nproc)}"
@@ -124,6 +159,7 @@ HDBET_COMMIT="678e44d546a84de0f2a7fc245f176b82b7d912fd"    # 4 commits past tag 
 KARAWUN_REPO="https://github.com/Rad-dude/karawun.git"
 KARAWUN_BRANCH="kul-extended-palette"
 KARAWUN_COMMIT="72bbc9558c139678a423b2ee43fbb134d656328c"
+KARAWUN_STOCK_VERSION="0.2.5.4"           # --karawun-stock: plain conda-forge package, no git clone
                                                              # KUL fork of DevelopmentalImagingMCRI/karawun
                                                              # (the real upstream -- NOT treanus/karawun,
                                                              # a stale personal fork frozen since 2021 that
@@ -297,6 +333,74 @@ _is_under() {
     esac
 }
 
+# True if $1 (a git commit/short-hash actually found installed) and $2 (the
+# pinned commit constant, which is sometimes stored short and sometimes full
+# in this file) agree once compared as a prefix either direction -- e.g. a
+# 7-char git-describe hash "40ee2d2" found on a binary should match the
+# 8-char pin "40ee2d22" it was built from, and a full 40-char pin should
+# match a full 40-char `git rev-parse HEAD`.
+_git_short_matches() {
+    local installed="$1" pinned="$2"
+    [ -n "$installed" ] && [ -n "$pinned" ] && \
+        { [[ "$pinned" == "$installed"* ]] || [[ "$installed" == "$pinned"* ]]; }
+}
+
+# ── Version-pin drift gate ──────────────────────────────────────────────────
+# Every section that only checks "does X already exist" (have X on PATH,
+# env_exists X, a version-marker file, a binary sitting at a fixed path)
+# shares the same blind spot: it treats ANY prior install as good enough,
+# even one that predates this script or came from a shared /usr/local
+# install elsewhere on PATH. Confirmed live on a real machine: shared
+# mrtrix3 resolves to 3.0.4-537-g5a3a8bf6, six pins behind the KUL-fork
+# commit (5a643594) this script actually requires -- and the fix
+# dwifslpreproc needs simply isn't in that build. version_gate() is the one
+# place that decides what to do about a mismatch; every pinned section calls
+# it instead of returning straight from its own "already present" check.
+#
+# $1 label, $2 installed version/commit (already normalized by the caller to
+# something directly comparable to $3), $3 the pinned version/commit.
+# Returns 0 -> caller should treat this as "keep what's there" (return/skip
+# the build). Returns 1 -> caller should fall through and build the pinned
+# version. Either way this function only ever recommends building a fresh,
+# separate copy under $SOFTWARE_ROOT (always yours) -- it never deletes or
+# modifies anything at the path where the mismatched version was found,
+# regardless of who owns it. A caller that then recreates one of ITS OWN
+# $SOFTWARE_ROOT conda envs/dirs to do that build (e.g. `mamba create -n X
+# -y` replacing an existing $SOFTWARE_ROOT/miniforge3/envs/X) is not an
+# exception to that -- it's still entirely inside $SOFTWARE_ROOT.
+version_gate() {
+    local label="$1" installed="$2" pinned="$3"
+    if [ "$installed" = "$pinned" ]; then
+        ok "$label already at the pinned version ($pinned)"
+        return 0
+    fi
+    warn "$label installed ($installed) does not match the pinned version ($pinned) this \
+script builds. This never deletes or modifies the existing install -- 'build' below only ever \
+means a fresh, separate copy under \$SOFTWARE_ROOT (always yours); anything found outside of it \
+is left exactly where it is, untouched, no matter who owns it."
+    if [ "$DRY_RUN" -eq 1 ]; then
+        echo "    [dry-run] would ask whether to keep $label $installed or build the pinned $pinned under \$SOFTWARE_ROOT"
+        return 0
+    fi
+    if [ "$ASSUME_YES" -ne 1 ] && [ -t 0 ]; then
+        local _vg_choice
+        read -r -p "  Keep installed $label ($installed), or build the pinned $pinned under \$SOFTWARE_ROOT? [keep/build] " _vg_choice
+        case "${_vg_choice:-keep}" in
+            build|Build|b|B) return 1 ;;
+            *) ok "Keeping existing $label ($installed) — pinned build skipped"; return 0 ;;
+        esac
+    fi
+    if [ "$FORCE_REBUILD_MISMATCHED" -eq 1 ]; then
+        warn "Non-interactive with --force-rebuild-mismatched: building pinned $label $pinned \
+(existing $installed left untouched at its own location)"
+        return 1
+    fi
+    warn "Non-interactive: keeping existing $label ($installed) despite the mismatch with the \
+pinned $pinned. Pass --force-rebuild-mismatched to build the pinned version automatically \
+instead, or re-run interactively to choose per tool."
+    return 0
+}
+
 # Version-marker convention for tools where live 'X --version' probing is
 # risky (GUI/Electron apps can hang trying to open a window instead of
 # printing text and exiting) or unreliable (some Electron apps report their
@@ -378,6 +482,8 @@ while [ $# -gt 0 ]; do
         --group)     GROUP_NAME="$2"; shift 2 ;;
         -y|--yes)    ASSUME_YES=1; shift ;;
         --dry-run)   DRY_RUN=1; shift ;;
+        --force-rebuild-mismatched) FORCE_REBUILD_MISMATCHED=1; shift ;;
+        --fresh-bashrc) FRESH_BASHRC=1; shift ;;
         --karawun-dev) USE_KARAWUN_DEV=1; shift ;;   # now the default; kept so existing invocations still work
         --karawun-stock) USE_KARAWUN_DEV=0; shift ;; # opt back out to the conda-forge package
         --with-hdglioauto) INCLUDE_HDGLIOAUTO=1; shift ;;
@@ -500,6 +606,24 @@ fi
 # running this script from a fresh, non-activated shell.
 export MAMBA_ROOT_PREFIX="$SOFTWARE_ROOT/miniforge3"
 
+# Self-apply, for the DURATION OF THIS RUNNING PROCESS ONLY, the same PATH
+# additions section_bashrc will eventually persist to ~/.bashrc. Without this,
+# every "have <tool>" check for something THIS SCRIPT ITSELF just installed
+# under $SOFTWARE_ROOT can never find it -- the running process's PATH only
+# ever reflects whatever the shell already had before this script started
+# (e.g. a completely different, pre-existing dev environment's own ~/.bashrc
+# block). Confirmed live, two symptoms of the same root cause: (1)
+# dcm2niix/dcm2bids kept reinstalling on every single run despite succeeding
+# the first time -- `have dcm2niix` was checking the OLD environment's PATH,
+# which never had them, not this run's own miniforge base where they
+# actually landed; (2) a freshly-built pinned mrtrix3/ANTs would keep losing
+# to a stale/foreign build still resolving first on that same untouched
+# PATH, re-triggering version_gate's rebuild prompt for something already
+# correctly built moments earlier. Harmless to prepend paths that don't
+# exist yet (nothing before the relevant section has run) -- bash silently
+# skips missing PATH entries.
+export PATH="$SOFTWARE_ROOT/miniforge3/bin:$SOFTWARE_ROOT/src/mrtrix3/bin:$SOFTWARE_ROOT/src/ANTs_install/bin:$PATH"
+
 # ── Resolved configuration summary — confirm before touching anything ───────
 
 echo
@@ -611,19 +735,58 @@ fi
 section_apt() {
     log "Installing system packages (apt)"
     run "sudo apt-get update"
-    run "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-        build-essential cmake ninja-build pkg-config git curl wget ca-certificates gnupg unzip \
+
+    # apt-get install fails its ENTIRE transaction the instant one package
+    # name doesn't resolve ("E: Unable to locate package") -- confirmed live
+    # on Linux Mint 21.1 / Ubuntu jammy: qt6-svg-dev isn't packaged there
+    # (qt6-base-dev is), and that alone aborted installing everything else in
+    # this list too, including build-essential/cmake/gcc-12, which ARE always
+    # available and were never actually the problem. Probe each package's
+    # availability first and only ask apt for the ones that actually resolve
+    # here -- same "detect capability, don't assume distro version"
+    # philosophy section_mrtrix3 already uses for its own Qt5/Qt6 choice via
+    # Qt6Config.cmake, just one layer earlier (apt metadata instead of a
+    # post-install CMake config file).
+    local core_pkgs="build-essential cmake ninja-build pkg-config git curl wget ca-certificates gnupg unzip \
         software-properties-common \
         gcc-12 g++-12 \
         python3 python3-dev python3-pip python3-venv \
         libeigen3-dev zlib1g-dev libfftw3-dev libtiff5-dev libpng-dev \
         libqt5opengl5-dev libqt5svg5-dev libgl1-mesa-dev libgl1-mesa-dri \
-        qt6-base-dev qt6-svg-dev \
         xvfb \
         p7zip-full \
         dcmtk \
         imagemagick tcsh \
         rsync tmux htop glances nvtop iotop lm-sensors ncdu ripgrep fd-find shellcheck jq parallel git-lfs"
+    local pkg avail_pkgs="" missing_pkgs=""
+    for pkg in $core_pkgs; do
+        if apt-cache show "$pkg" >/dev/null 2>&1; then
+            avail_pkgs="$avail_pkgs $pkg"
+        else
+            missing_pkgs="$missing_pkgs $pkg"
+        fi
+    done
+    [ -n "$missing_pkgs" ] && warn "Not packaged on this base, skipping (may need a manual \
+alternative if you actually need one of these):$missing_pkgs"
+    run "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y$avail_pkgs"
+
+    # Qt6 dev headers for mrtrix3/mrview: only worth installing as a pair.
+    # qt6-base-dev alone (without qt6-svg-dev) would make section_mrtrix3's
+    # own Qt6Config.cmake probe pick Qt6, then build a mrview with broken
+    # toolbar icons/cursors (no SVG plugin) instead of a fully working Qt5
+    # build. Confirmed live: qt6-base-dev IS packaged on Ubuntu 22.04/Linux
+    # Mint 21, qt6-svg-dev is NOT -- so this deliberately skips installing
+    # BOTH there, leaving Qt6Config.cmake absent, which makes
+    # section_mrtrix3 correctly fall back to Qt5 (libqt5svg5-dev is already
+    # in the core list above, so that fallback always has full SVG icon
+    # support -- never a silently degraded build either way).
+    if apt-cache show qt6-base-dev >/dev/null 2>&1 && apt-cache show qt6-svg-dev >/dev/null 2>&1; then
+        run "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y qt6-base-dev qt6-svg-dev"
+    else
+        warn "qt6-base-dev + qt6-svg-dev aren't both packaged on this base -- skipping both, so \
+mrtrix3 will build against Qt5 instead (already has full SVG icon support via libqt5svg5-dev above)"
+    fi
+
     ok "apt packages installed (mrtrix3/ANTs build deps + pkg-config, gcc-12/g++-12 for the ANTs/ITK \
 build specifically -- see section_ants for why, imagemagick/tcsh for FreeSurfer-adjacent tooling, \
 xvfb + libgl1-mesa-dri for headless mrview screenshots (KUL_clinical_fmridti.sh's own runtime check \
@@ -996,16 +1159,26 @@ section_clinical_pydeps() {
 # ── 4a. scilpy env (required — KUL_FWT's filtering/RecoBundles step) ──────────
 
 section_env_scilpy() {
+    local dest="$SOFTWARE_ROOT/src/scilpy"
     if env_exists scilpy; then
-        ok "conda env 'scilpy' already exists"
-        return
+        if [ -d "$dest/.git" ]; then
+            local installed_commit
+            installed_commit=$(git -C "$dest" rev-parse HEAD 2>/dev/null) || installed_commit=""
+            if _git_short_matches "$installed_commit" "$SCILPY_COMMIT"; then
+                ok "conda env 'scilpy' already exists at the pinned commit (${installed_commit:0:8})"
+                return
+            fi
+            version_gate "scilpy" "${installed_commit:-unknown}" "$SCILPY_COMMIT" && return
+        else
+            ok "conda env 'scilpy' already exists (no git checkout at $dest to verify against the pinned commit -- assuming OK)"
+            return
+        fi
     fi
     log "Creating 'scilpy' env (python 3.12, scilpy $SCILPY_COMMIT — pinned per \
 KUL_NIS/README.md: v2.3.0)"
     run "$(mamba_bin) create -n scilpy python=3.12 -y"
     run "'$(env_bin scilpy pip)' install scilpy==2.3.0"
     run "'$(env_bin scilpy pip)' uninstall scilpy -y"
-    local dest="$SOFTWARE_ROOT/src/scilpy"
     [ -d "$dest" ] || run "git clone https://github.com/scilus/scilpy.git '$dest'"
     run "cd '$dest' && git checkout $SCILPY_COMMIT"
     run "cd '$dest' && '$(env_bin scilpy pip)' install -e . --no-deps"
@@ -1022,13 +1195,23 @@ KUL_NIS/README.md: v2.3.0)"
 # ── 4b. HD-BET env (brain extraction) ─────────────────────────────────────────
 
 section_env_hdbet() {
+    local dest="$SOFTWARE_ROOT/src/HD-BET"
     if env_exists hd-bet-env; then
-        ok "conda env 'hd-bet-env' already exists"
-        return
+        if [ -d "$dest/.git" ]; then
+            local installed_commit
+            installed_commit=$(git -C "$dest" rev-parse HEAD 2>/dev/null) || installed_commit=""
+            if _git_short_matches "$installed_commit" "$HDBET_COMMIT"; then
+                ok "conda env 'hd-bet-env' already exists at the pinned commit (${installed_commit:0:8})"
+                return
+            fi
+            version_gate "hd-bet-env (HD-BET)" "${installed_commit:-unknown}" "$HDBET_COMMIT" && return
+        else
+            ok "conda env 'hd-bet-env' already exists (no git checkout at $dest to verify -- assuming OK)"
+            return
+        fi
     fi
     log "Creating 'hd-bet-env' (python 3.10, torch 2.6, HD-BET $HDBET_COMMIT)"
     run "$(mamba_bin) create -n hd-bet-env python=3.10 -y"
-    local dest="$SOFTWARE_ROOT/src/HD-BET"
     [ -d "$dest" ] || run "git clone https://github.com/MIC-DKFZ/HD-BET.git '$dest'"
     run "cd '$dest' && git checkout $HDBET_COMMIT"
     # Install HD-BET and torch together in one resolver pass, with the CUDA (or
@@ -1236,9 +1419,21 @@ section_env_hdglio() {
     [ -d "$hdbet_dir" ] || run "git clone https://github.com/MIC-DKFZ/HD-BET.git '$hdbet_dir'"
     run "cd '$hdbet_dir' && git checkout $HDBET_V1_COMMIT"
 
+    local need_create=1
     if env_exists hdglio; then
-        ok "conda env 'hdglio' already exists"
-    else
+        local installed_ver
+        installed_ver=$("$(mamba_bin)" list -n hdglio hd-glio 2>/dev/null | awk '$1=="hd-glio"{print $2}')
+        if [ "$installed_ver" = "2.0" ]; then
+            ok "conda env 'hdglio' already exists at the pinned hd-glio version ($installed_ver)"
+            need_create=0
+        elif [ -n "$installed_ver" ]; then
+            version_gate "hdglio (hd-glio package)" "$installed_ver" "2.0" && need_create=0
+        else
+            ok "conda env 'hdglio' already exists (couldn't read the installed hd-glio version -- assuming OK)"
+            need_create=0
+        fi
+    fi
+    if [ "$need_create" -eq 1 ]; then
         log "Creating 'hdglio' env (python 3.9, torch 1.13.1, nnunet 1.6.4, hd-glio 2.0, HD-BET 1.0)"
         run "$(mamba_bin) create -n hdglio python=3.9 -y"
 
@@ -1350,27 +1545,46 @@ section_env_resseg() {
 
 section_env_karawun() {
     if [ "$USE_KARAWUN_DEV" -eq 1 ]; then
+        local dest="$SOFTWARE_ROOT/src/karawun"
         if env_exists KarawunDev; then
-            ok "conda env 'KarawunDev' already exists"
-            return
+            if [ -d "$dest/.git" ]; then
+                local installed_commit
+                installed_commit=$(git -C "$dest" rev-parse HEAD 2>/dev/null) || installed_commit=""
+                if _git_short_matches "$installed_commit" "$KARAWUN_COMMIT"; then
+                    ok "conda env 'KarawunDev' already exists at the pinned commit (${installed_commit:0:8})"
+                    return
+                fi
+                version_gate "KarawunDev (karawun)" "${installed_commit:-unknown}" "$KARAWUN_COMMIT" && return
+            else
+                ok "conda env 'KarawunDev' already exists (no git checkout at $dest to verify -- assuming OK)"
+                return
+            fi
         fi
         log "Creating 'KarawunDev' (editable install, karawun $KARAWUN_COMMIT + dcm2bids 3.1.1)"
         run "$(mamba_bin) create -n KarawunDev python=3.14 -y"
         run "'$(env_bin KarawunDev pip)' install dcm2bids>=3.1"
-        local dest="$SOFTWARE_ROOT/src/karawun"
         [ -d "$dest" ] || run "git clone -b '$KARAWUN_BRANCH' '$KARAWUN_REPO' '$dest'"
         run "cd '$dest' && git checkout $KARAWUN_COMMIT"
         run "cd '$dest' && '$(env_bin KarawunDev pip)' install -e ."
         ok "KarawunDev ready"
     else
         if env_exists KarawunEnv; then
-            ok "conda env 'KarawunEnv' already exists"
-            return
+            local installed_ver
+            installed_ver=$("$(mamba_bin)" list -n KarawunEnv karawun 2>/dev/null | awk '$1=="karawun"{print $2}')
+            if [ "$installed_ver" = "$KARAWUN_STOCK_VERSION" ]; then
+                ok "conda env 'KarawunEnv' already exists at the pinned version ($installed_ver)"
+                return
+            elif [ -n "$installed_ver" ]; then
+                version_gate "KarawunEnv (karawun)" "$installed_ver" "$KARAWUN_STOCK_VERSION" && return
+            else
+                ok "conda env 'KarawunEnv' already exists (couldn't read the installed karawun version -- assuming OK)"
+                return
+            fi
         fi
         log "Creating 'KarawunEnv' (plain conda-forge package, no git clone needed)"
-        run "$(mamba_bin) create -n KarawunEnv python=3.8 karawun=0.2.5.4 -c conda-forge -y"
+        run "$(mamba_bin) create -n KarawunEnv python=3.8 karawun=$KARAWUN_STOCK_VERSION -c conda-forge -y"
         ok "KarawunEnv ready (used by KUL_karawun_prepare.sh / KUL_karawun2brainlab.sh)"
-        warn "KarawunEnv (v0.2.5.4) will silently corrupt output DICOMs given an Enhanced/multi-frame donor (e.g. Philips) -- re-run with --karawun-dev if that's a possibility at your site"
+        warn "KarawunEnv (v$KARAWUN_STOCK_VERSION) will silently corrupt output DICOMs given an Enhanced/multi-frame donor (e.g. Philips) -- re-run with --karawun-dev if that's a possibility at your site"
     fi
 }
 
@@ -1556,8 +1770,15 @@ section_env_lore_sd() {
 
 section_mrtrix3() {
     if have mrconvert; then
-        ok "mrconvert already on PATH ($(mrconvert -version 2>&1 | head -1))"
-        return
+        local installed_ver installed_hash pinned_short
+        installed_ver=$(mrconvert -version 2>&1 | head -1)
+        installed_hash=$(echo "$installed_ver" | grep -oP '(?<=-g)[0-9a-f]+' | head -1)
+        pinned_short="${MRTRIX3_COMMIT:0:8}"
+        if _git_short_matches "$installed_hash" "$pinned_short"; then
+            ok "mrconvert already on PATH at the pinned commit ($installed_ver)"
+            return
+        fi
+        version_gate "mrtrix3" "${installed_hash:-$installed_ver}" "$pinned_short ($MRTRIX3_BRANCH)" && return
     fi
     local dest="$SOFTWARE_ROOT/src/mrtrix3"
     log "Building MRtrix3 @ $MRTRIX3_COMMIT via CMake+Ninja (this takes a while)"
@@ -1625,12 +1846,57 @@ the Qt5 package is named libqt5gui5t64)."
     fi
 
     log "Building mrview against Qt${qt_major}"
-    run "cd '$dest' && cmake -B build -GNinja \
+    # /usr/bin/cmake (and CMAKE_MAKE_PROGRAM=/usr/bin/ninja) explicitly, not a
+    # bare 'cmake' resolved via PATH -- confirmed bug: any shell that already
+    # sourced a DIFFERENT, unrelated conda/mamba setup before this script ran
+    # (e.g. a pre-existing dev environment's ~/.bashrc block, prepending its
+    # own miniforge3/bin onto PATH ahead of anything this script installs) can
+    # silently substitute a wrong cmake here. Its own default search prefixes
+    # then pull in that OTHER conda env's incomplete zlib (runtime .so.1 only,
+    # no dev libz.so symlink), so find_package(ZLIB) reports the version fine
+    # (from the system header) but fails on ZLIB_LIBRARY -- CMAKE_IGNORE_PREFIX_PATH
+    # above only excludes THIS root's own miniforge, not some other one.
+    # /usr/bin/cmake always exists at that fixed path once section_apt's
+    # 'cmake' package is installed, so it sidesteps PATH ambiguity entirely --
+    # same "don't trust bare-name PATH resolution" principle as env_bin/
+    # mamba_bin/conda_bin elsewhere in this script.
+    #
+    # Pinning the cmake BINARY alone is not sufficient -- confirmed live:
+    # even invoked via /usr/bin/cmake, CMake's own compiler detection still
+    # resolves a bare 'cc'/'c++' via the same contaminated PATH, landing on
+    # that other conda env's own bundled GCC (its 'compilers' package) rather
+    # than the system one, which is what was actually biasing ZLIB_LIBRARY
+    # detection toward that conda env's incomplete zlib -- reproduced and
+    # confirmed fixed in isolation with a trivial find_package(ZLIB) test.
+    # /usr/bin/gcc-12 / g++-12 are pinned explicitly here for the same reason
+    # section_ants already pins them (see the ITK/GCC13 comment there) --
+    # reusing the identical, already-proven-working pair rather than
+    # introducing a second, untested compiler combination in this script.
+    #
+    # Pinning cmake + the compiler is STILL not sufficient -- confirmed live,
+    # a third layer of the same bug: GCC finds its own subprograms (ld, as)
+    # by searching PATH itself (unless told otherwise), so the final link
+    # step silently used that other conda env's ld (GNU Binutils 2.45.1,
+    # bundled by its own 'compilers' package) instead of the system one
+    # (2.38, what every /usr/lib .so on this machine was actually built
+    # against) -- producing hundreds of bogus "undefined reference" errors
+    # for symbols in transitively-linked system libraries (libkrb5, libX11,
+    # libharfbuzz, etc.) that a 7-major-version-newer linker resolves
+    # differently. -B/usr/bin makes gcc/g++ search there FIRST for ld/as,
+    # confirmed live to correctly resolve to the real system linker.
+    run "cd '$dest' && /usr/bin/cmake -B build -GNinja \
+        -DCMAKE_MAKE_PROGRAM=/usr/bin/ninja \
+        -DCMAKE_C_COMPILER=/usr/bin/gcc-12 \
+        -DCMAKE_CXX_COMPILER=/usr/bin/g++-12 \
+        -DCMAKE_C_FLAGS=-B/usr/bin \
+        -DCMAKE_CXX_FLAGS=-B/usr/bin \
+        -DCMAKE_EXE_LINKER_FLAGS=-B/usr/bin \
+        -DCMAKE_SHARED_LINKER_FLAGS=-B/usr/bin \
         -DCMAKE_INSTALL_PREFIX='$dest' \
         -DCMAKE_IGNORE_PREFIX_PATH='$SOFTWARE_ROOT/miniforge3' \
         $qt_cmake_args"
-    run "cd '$dest' && cmake --build build -j$NCPU"
-    run "cd '$dest' && cmake --install build"
+    run "cd '$dest' && /usr/bin/cmake --build build -j$NCPU"
+    run "cd '$dest' && /usr/bin/cmake --install build"
 
     # mrview's toolbar icons and custom tool cursors are loaded at runtime as
     # Qt resources ending in .svg (cpp/gui/cursor.cpp etc use the generic
@@ -1700,8 +1966,14 @@ section_shard_recon in this script for details."
 
 section_ants() {
     if have antsRegistrationSyN.sh; then
-        ok "ANTs already on PATH"
-        return
+        local installed_ver installed_hash
+        installed_ver=$(antsRegistration --version 2>&1 | head -1)
+        installed_hash=$(echo "$installed_ver" | grep -oP '(?<=-g)[0-9a-f]+' | head -1)
+        if _git_short_matches "$installed_hash" "$ANTS_COMMIT"; then
+            ok "ANTs already on PATH at the pinned commit ($installed_ver)"
+            return
+        fi
+        version_gate "ANTs" "${installed_hash:-$installed_ver}" "$ANTS_COMMIT (v2.4.4.post20)" && return
     fi
     local dest="$SOFTWARE_ROOT/src/ANTs"
     log "Building ANTs @ $ANTS_COMMIT (v2.4.4.post20) — this takes a long while"
@@ -1723,9 +1995,20 @@ mid-build isn't safe anyway)"
         run "rm -rf '$dest/build'"
     fi
     run "mkdir -p '$dest/build'"
-    run "cd '$dest/build' && cmake -DCMAKE_C_COMPILER=/usr/bin/gcc-12 -DCMAKE_CXX_COMPILER=/usr/bin/g++-12 -DCMAKE_INSTALL_PREFIX='$SOFTWARE_ROOT/src/ANTs_install' .."
-    run "cd '$dest/build' && make -j$NCPU"
-    run "cd '$dest/build/ANTS-build' && make install"
+    # /usr/bin/cmake and /usr/bin/make explicitly, not bare names -- same
+    # PATH-shadowing risk as section_mrtrix3 above (a different, unrelated
+    # conda/mamba setup already active in the shell can substitute a wrong
+    # cmake here too), fixed the same way: apt-installed build tools always
+    # live at this fixed system path regardless of shell PATH ordering.
+    # -B/usr/bin also pins gcc-12/g++-12's own subprogram search (ld, as) to
+    # the system ones -- confirmed live in section_mrtrix3 that GCC otherwise
+    # finds a bare 'ld' via PATH too, silently picking up that other conda
+    # env's much newer (and ABI-incompatible with this system's .so files)
+    # binutils and failing the link step with hundreds of bogus "undefined
+    # reference" errors.
+    run "cd '$dest/build' && /usr/bin/cmake -DCMAKE_C_COMPILER=/usr/bin/gcc-12 -DCMAKE_CXX_COMPILER=/usr/bin/g++-12 -DCMAKE_C_FLAGS=-B/usr/bin -DCMAKE_CXX_FLAGS=-B/usr/bin -DCMAKE_EXE_LINKER_FLAGS=-B/usr/bin -DCMAKE_SHARED_LINKER_FLAGS=-B/usr/bin -DCMAKE_INSTALL_PREFIX='$SOFTWARE_ROOT/src/ANTs_install' .."
+    run "cd '$dest/build' && /usr/bin/make -j$NCPU"
+    run "cd '$dest/build/ANTS-build' && /usr/bin/make install"
     ok "ANTs installed to $SOFTWARE_ROOT/src/ANTs_install"
 }
 
@@ -1733,15 +2016,48 @@ mid-build isn't safe anyway)"
 
 section_fsl() {
     if [ -x "$SOFTWARE_ROOT/src/FSL/bin/flirt" ] || have flirt; then
-        ok "FSL already installed"
-        return
+        # Confirmed bug (found live): using ${FSLDIR:-$SOFTWARE_ROOT/src/FSL}
+        # here (matching section_verify's own lookup) let an inherited
+        # FSLDIR from a completely different, pre-existing shell environment
+        # (e.g. a shared /usr/local/fsl install exported by an unrelated
+        # ~/.bashrc block) override a build that's ALREADY correctly sitting
+        # under this root at the pinned version -- the direct-path check just
+        # above finds it fine, but the version check then read the OTHER
+        # FSLDIR's fslversion instead and reported a false mismatch against
+        # an install this script never touched. This root's own copy, if
+        # present, always wins; $FSLDIR is only the fallback when this root
+        # has nothing of its own to check (e.g. only 'have flirt' matched).
+        local fsl_root="$SOFTWARE_ROOT/src/FSL"
+        [ -f "$fsl_root/etc/fslversion" ] || fsl_root="${FSLDIR:-$fsl_root}"
+        if [ -f "$fsl_root/etc/fslversion" ]; then
+            local installed_ver
+            installed_ver="$(cat "$fsl_root/etc/fslversion")"
+            if [ "$installed_ver" = "$FSL_VERSION" ]; then
+                ok "FSL already installed at the pinned version ($installed_ver)"
+                return
+            fi
+            version_gate "FSL" "$installed_ver" "$FSL_VERSION" && return
+        else
+            ok "FSL already installed (no $fsl_root/etc/fslversion to check against the pinned $FSL_VERSION -- assuming OK)"
+            return
+        fi
     fi
     log "Installing FSL $FSL_VERSION via the official installer"
     local installer="$SOFTWARE_ROOT/tmp/fslinstaller.py"
     run "curl -fsSL -o '$installer' https://fsl.fmrib.ox.ac.uk/fsldownloads/fslinstaller.py"
     warn "FSL installer syntax changes across releases (SOFTWARE_ROOT_SETUP.md flags this) — \
 if the -V flag below is rejected, check 'python3 $installer --help' for the current syntax."
-    run "python3 '$installer' -d '$SOFTWARE_ROOT/src/FSL' -V '$FSL_VERSION'"
+    # -s/--no_shell: fslinstaller.py has its own independent configure_shell()
+    # step that writes a "FSL Setup" FSLDIR/PATH block straight into
+    # ~/.profile (or ~/.bash_profile) -- confirmed live, it did so on this
+    # machine unless told not to. That's a third, redundant source of FSL
+    # environment config on top of section_bashrc's own managed ~/.bashrc
+    # block (which already handles FSLDIR/PATH correctly) -- harmless only by
+    # coincidence when it happens to agree, actively wrong if this section
+    # ever rebuilds FSL to a newer pinned version and the .profile copy goes
+    # stale. section_bashrc is the one authoritative place this script
+    # manages shell config; let it stay that way.
+    run "python3 '$installer' -d '$SOFTWARE_ROOT/src/FSL' -V '$FSL_VERSION' -s"
     ok "FSL installed to $SOFTWARE_ROOT/src/FSL"
 }
 
@@ -1862,6 +2178,39 @@ place the file they email you at $fs_license."
                 -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36" \
                 -o "$upd_script" \
                 "https://surfer.nmr.mgh.harvard.edu/pub/dist/freesurfer/8.2.0/fs820_updates.sh"; then
+            # fs820_updates.sh does its own OS-detection via a hardcoded `grep
+            # PRETTY_NAME /etc/os-release`, matched against literal strings
+            # ("Ubuntu 22", "Ubuntu 24", CentOS/Rocky/Darwin) -- it has no
+            # concept of Debian/Ubuntu derivatives, so on Linux Mint (whose
+            # PRETTY_NAME says "Linux Mint 21.1") it hits its catch-all
+            # "unrecognized" branch and exits 1 before ever checking for or
+            # applying a single patch, even though the real base (confirmed
+            # via the same /etc/upstream-release/lsb-release ubuntu_release()
+            # already reads for every other apt/download decision in this
+            # script) is an Ubuntu release it explicitly supports. This is
+            # FreeSurfer's own third-party script, not ours to fix upstream --
+            # so the local copy just downloaded gets a one-line patch feeding
+            # it "Ubuntu <real upstream release>" instead of the raw Mint
+            # PRETTY_NAME. Every actual patch-selection/checksum-verification
+            # line is untouched; a native (non-derivative) Ubuntu is unaffected
+            # since /etc/upstream-release/lsb-release won't exist there.
+            if [ -f /etc/upstream-release/lsb-release ]; then
+                python3 - "$upd_script" "$(ubuntu_release)" <<'PYEOF'
+import sys
+from pathlib import Path
+p = Path(sys.argv[1])
+release = sys.argv[2]
+s = p.read_text()
+old = 'host_cmd="grep PRETTY_NAME /etc/os-release"'
+new = 'host_cmd="echo PRETTY_NAME=\\"Ubuntu {}\\""'.format(release)
+if old in s:
+    p.write_text(s.replace(old, new))
+    print("    patched fs820_updates.sh OS-identification (Linux Mint -> Ubuntu {})".format(release))
+else:
+    print("    fs820_updates.sh OS-identification line has changed upstream -- patch skipped, \
+falling back to its own (likely 'unrecognized OS') behavior")
+PYEOF
+            fi
             # The script prompts per-file via 'read -n 1' ("Update <file>?
             # [Yy/Nn]"). Confirmed bug: plain 'yes |' actually answers only
             # every OTHER prompt correctly -- each 'y\n' pair satisfies one
@@ -1977,9 +2326,20 @@ the nilearn GLM engine instead (KUL_clinical_fmridti.sh -E nilearn)."
 
 section_itksnap() {
     local dest="$SOFTWARE_ROOT/src/itksnap"
+    local marker="$SOFTWARE_ROOT/.installed_versions/itksnap"
     if [ -x "$dest/bin/itksnap" ]; then
-        ok "ITK-SNAP already installed at $dest"
-        return
+        if [ -f "$marker" ]; then
+            local installed_ver
+            installed_ver="$(cat "$marker")"
+            if [ "$installed_ver" = "$ITKSNAP_VERSION" ]; then
+                ok "ITK-SNAP already installed at the pinned version ($installed_ver)"
+                return
+            fi
+            version_gate "ITK-SNAP" "$installed_ver" "$ITKSNAP_VERSION" && return
+        else
+            ok "ITK-SNAP already installed at $dest (no version marker to check against the pinned $ITKSNAP_VERSION -- assuming OK)"
+            return
+        fi
     fi
     log "Downloading and extracting ITK-SNAP $ITKSNAP_VERSION"
     local url="https://sourceforge.net/projects/itk-snap/files/itk-snap/${ITKSNAP_VERSION%%-*}/itksnap-${ITKSNAP_VERSION}-Linux-gcc64.tar.gz/download"
@@ -1987,6 +2347,7 @@ section_itksnap() {
         echo "    [dry-run] would download $url and extract it to $dest"
         return
     fi
+    rm -rf "$dest"
     mkdir -p "$dest"
     local tmpfile="$SOFTWARE_ROOT/tmp/itksnap.tar.gz"
     curl -fSL --retry 5 --retry-delay 5 --retry-all-errors -C - -o "$tmpfile" "$url"
@@ -2011,9 +2372,20 @@ section_itksnap() {
 
 section_psychopy() {
     local dest="$SOFTWARE_ROOT/src/psychopy"
+    local marker="$SOFTWARE_ROOT/.installed_versions/psychopy"
     if [ -x "$dest/psychopy" ]; then
-        ok "PsychoPy Studio already installed at $dest"
-        return
+        if [ -f "$marker" ]; then
+            local installed_ver
+            installed_ver="$(cat "$marker")"
+            if [ "$installed_ver" = "$PSYCHOPY_VERSION" ]; then
+                ok "PsychoPy Studio already installed at the pinned version ($installed_ver)"
+                return
+            fi
+            version_gate "PsychoPy Studio" "$installed_ver" "$PSYCHOPY_VERSION" && return
+        else
+            ok "PsychoPy Studio already installed at $dest (no version marker to check against the pinned $PSYCHOPY_VERSION -- assuming OK)"
+            return
+        fi
     fi
     log "Installing libfuse2 (needed to run AppImages) and downloading PsychoPy Studio $PSYCHOPY_VERSION"
     local url="https://github.com/psychopy/psychopy/releases/download/$PSYCHOPY_VERSION/PsychoPy_Studio_${PSYCHOPY_VERSION}.AppImage"
@@ -2117,9 +2489,20 @@ section_r() {
 RSTUDIO_VERSION="2026.07.1-147"
 
 section_rstudio() {
+    local marker="$SOFTWARE_ROOT/.installed_versions/rstudio"
     if have rstudio; then
-        ok "RStudio already installed"
-        return
+        if [ -f "$marker" ]; then
+            local installed_ver
+            installed_ver="$(cat "$marker")"
+            if [ "$installed_ver" = "$RSTUDIO_VERSION" ]; then
+                ok "RStudio already installed at the pinned version ($installed_ver)"
+                return
+            fi
+            version_gate "RStudio" "$installed_ver" "$RSTUDIO_VERSION" && return
+        else
+            ok "RStudio already installed (no version marker to check against the pinned $RSTUDIO_VERSION -- assuming OK; likely installed before this script tracked versions, or by another means)"
+            return
+        fi
     fi
     if ! have R; then
         warn "RStudio works best with R already installed -- run the r section first if it's not already done"
@@ -2158,12 +2541,21 @@ section_afni() {
     rel="$(ubuntu_release)"
     case "$rel" in
         24.*) afni_pkg="linux_ubuntu_24_64" ;;
-        22.*) afni_pkg="linux_ubuntu_22_64" ;;
         *)
-            warn "AFNI package tested here is for Ubuntu 22.04/24.04 -- falling back to the 24.04 \
-build; if this machine is much older/newer it may not run cleanly. Check \
+            # AFNI dropped linux_ubuntu_22_64 from their distribution server
+            # at some point after this section was written -- confirmed live
+            # (curl https://afni.nimh.nih.gov/pub/dist/bin/ 404s a test file
+            # for it, and no longer lists it in the directory index at all;
+            # only linux_ubuntu_16_64 and linux_ubuntu_24_64 remain for
+            # Ubuntu). Route everything that isn't 24.x here, not just
+            # genuinely unknown releases -- AFNI's own package list, not this
+            # script's guess at Ubuntu compatibility, is the actual source of
+            # truth, and it changes on their schedule, not this script's.
+            warn "AFNI has no package specifically for Ubuntu $rel (checked \
+https://afni.nimh.nih.gov/pub/dist/bin/ live -- only linux_ubuntu_16_64 and linux_ubuntu_24_64 \
+exist for Ubuntu right now) -- falling back to the 24.04 build. Check \
 https://afni.nimh.nih.gov/pub/dist/doc/htmldoc/background_install/install_instructs/index.html \
-for other options if it doesn't."
+if it doesn't run cleanly."
             afni_pkg="linux_ubuntu_24_64"
             ;;
     esac
@@ -2323,6 +2715,48 @@ $marker_end
 EOF
 )
 
+    # --fresh-bashrc: back up ~/.bashrc and rebuild it from the distro's own
+    # stock skeleton before the normal append logic below runs. This is
+    # deliberately narrow, not an attempt at understanding what's "worth
+    # keeping" in an arbitrary ~/.bashrc -- it can't know that (that took an
+    # actual read of the specific file it was tested against, not something
+    # a generic script can infer). What it CAN do generically: give a clean
+    # slate based on /etc/skel/.bashrc (the same baseline every fresh account
+    # gets, which covers the prompt/aliases/history/completion setup most
+    # unmodified ~/.bashrc files still have) plus this script's own managed
+    # block, instead of appending onto a ~/.bashrc that might already source
+    # a completely different, unrelated environment -- confirmed live, during
+    # this project's own migration, that appending onto such a file leaves
+    # BOTH active at once and causes real bugs (PATH-shadowed compilers/
+    # linkers, wrong tool versions silently winning). The backup is there so
+    # nothing from the old file is actually lost, just not auto-merged.
+    if [ "$FRESH_BASHRC" -eq 1 ]; then
+        if [ "$INSTALL_MODE" = "shared" ]; then
+            warn "--fresh-bashrc only applies in user mode (rewriting /etc/bash.bashrc would affect \
+every account on this box, not just yours) -- ignoring it, appending to the existing files as usual."
+        elif [ "$DRY_RUN" -eq 1 ]; then
+            echo "    [dry-run] would back up $HOME/.bashrc and rebuild it from /etc/skel/.bashrc \
+(or leave the current file as-is if no skeleton exists) plus the managed block below"
+        else
+            local bashrc_backup="$HOME/.bashrc.pre_kul_setup_$(date +%Y%m%d_%H%M%S)"
+            if [ -f "$HOME/.bashrc" ]; then
+                cp "$HOME/.bashrc" "$bashrc_backup"
+                ok "Backed up your existing \$HOME/.bashrc to $bashrc_backup"
+            fi
+            if [ -f /etc/skel/.bashrc ]; then
+                cp /etc/skel/.bashrc "$HOME/.bashrc"
+                ok "Rebuilt \$HOME/.bashrc from the stock /etc/skel/.bashrc skeleton -- review \
+$bashrc_backup for anything you added beyond the stock prompt/aliases/completion setup (custom \
+exports, extra aliases, another shell config sourced from it, etc.) and add it back in by hand; \
+this script only adds its own managed block below."
+            else
+                warn "No /etc/skel/.bashrc on this system to rebuild from -- leaving your current \
+\$HOME/.bashrc as the base and just appending the managed block below, same as without \
+--fresh-bashrc (your backup at $bashrc_backup is there either way)."
+            fi
+        fi
+    fi
+
     local dests=()
     if [ "$INSTALL_MODE" = "shared" ]; then
         dests=("/etc/profile.d/kul_nis_env.sh" "/etc/bash.bashrc")
@@ -2403,7 +2837,15 @@ section_verify() {
         # FSL's actual patch version -- real behavioural differences exist between
         # e.g. 6.0.5 and 6.0.6 downstream in this pipeline, so pull the precise
         # version FSL itself records instead.
-        _fsl_dir="${FSLDIR:-$SOFTWARE_ROOT/src/FSL}"
+        # This root's own copy wins if it has one -- same fix as section_fsl's
+        # install-time check (confirmed live: an inherited FSLDIR from an
+        # unrelated pre-existing shell environment was overriding a build
+        # already correctly sitting under $SOFTWARE_ROOT, misreporting its
+        # version here too).
+        _fsl_dir="$SOFTWARE_ROOT/src/FSL"
+        if [ ! -f "$_fsl_dir/etc/fslversion" ]; then
+            _fsl_dir="${FSLDIR:-}"
+        fi
         if [ ! -f "$_fsl_dir/etc/fslversion" ]; then
             _flirt_bin=$(command -v flirt)
             _fsl_dir="${_flirt_bin%/bin/flirt}"
@@ -2419,7 +2861,9 @@ section_verify() {
     fi
 
     if have recon-all; then
-        local _fs_lic="${FS_LICENSE:-${FREESURFER_HOME:-$SOFTWARE_ROOT/src/freesurfer}/license.txt}"
+        # Same "this root's own copy wins" fix as FSL above.
+        local _fs_lic="$SOFTWARE_ROOT/src/freesurfer/license.txt"
+        [ -f "$_fs_lic" ] || _fs_lic="${FS_LICENSE:-${FREESURFER_HOME:-}/license.txt}"
         if [ -f "$_fs_lic" ]; then
             vok "FreeSurfer" "recon-all resolves, license.txt present"
         else
