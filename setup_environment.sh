@@ -12,8 +12,15 @@
 #
 # This script is idempotent where practical (safe to re-run; skips what's
 # already present) but it DOES modify the system: it installs apt packages,
-# Docker, CUDA/NVIDIA driver bits, and writes a block to ~/.bashrc (or
-# /etc/bash.bashrc + /etc/profile.d in shared mode). Read section toggles
+# Docker, CUDA/NVIDIA driver bits, and writes a managed environment block to
+# ~/.bashrc (user mode) or to /etc/profile.d/kul_nis_env.sh with a one-line
+# source shim in /etc/bash.bashrc (shared mode). The bashrc section owns that
+# block: it detects which mode a box is already in from what is on disk,
+# refreshes a stale block in place rather than skipping it, and removes copies
+# left in the other mode's locations -- exactly one live copy of the body is
+# the invariant, since a second one makes every shell source FreeSurfer and
+# FSL twice and duplicates PATH. Backups are left as <file>.kulbak.<stamp>.
+# Read section toggles
 # below before running on a machine you care about. Everything under
 # $SOFTWARE_ROOT is self-contained and easy to delete if you want to start
 # over -- with one exception: FreeSurfer (current upstream packaging is
@@ -422,12 +429,17 @@ read_version() { cat "$SOFTWARE_ROOT/.installed_versions/$1" 2>/dev/null; }
 # immediately in this non-interactive context, before ever reaching our
 # appended block).
 _refresh_env_for_verify() {
-    local f="$HOME/.bashrc"
-    if [ "$INSTALL_MODE" = "shared" ]; then
-        f="/etc/profile.d/kul_nis_env.sh"
-        [ -f "$f" ] || f="/etc/bash.bashrc"
-    fi
-    [ -f "$f" ] || return 0
+    # Derived from what is actually on disk rather than from INSTALL_MODE, so
+    # this still finds the block when the mode was mis-detected or overridden.
+    # Order matters: KUL_BLOCK_ALL_DESTS lists the user location first and
+    # /etc/bash.bashrc last, so in shared mode this picks the real body in
+    # /etc/profile.d rather than the one-line shim that sources it.
+    local f=""
+    local c
+    for c in "${KUL_BLOCK_ALL_DESTS[@]}"; do
+        if kul_block_present_in "$c"; then f="$c"; break; fi
+    done
+    [ -n "$f" ] && [ -f "$f" ] || return 0
     local block
     block=$(sed -n '/# >>> KUL_NIS\/KUL_VBG\/KUL_FWT environment (managed block) >>>/,/# <<< KUL_NIS\/KUL_VBG\/KUL_FWT environment (managed block) <<</p' "$f")
     if [ -n "$block" ]; then
@@ -458,6 +470,79 @@ section_enabled() {
         [[ ",${SKIP_SECTIONS}," != *",${name},"* ]]
     else
         return 0
+    fi
+}
+
+# ── Managed shell-env block — markers, destinations, edit helpers ─────────────
+# Every place the managed block can legitimately live. Kept in one list so the
+# bashrc section, the mode detection below and verify all reason about the same
+# set of files instead of each deriving its own from INSTALL_MODE.
+KUL_BLOCK_MARKER="# >>> KUL_NIS/KUL_VBG/KUL_FWT environment (managed block) >>>"
+KUL_BLOCK_MARKER_END="# <<< KUL_NIS/KUL_VBG/KUL_FWT environment (managed block) <<<"
+KUL_BLOCK_USER_DESTS=("$HOME/.bashrc")
+KUL_BLOCK_SHARED_DESTS=("/etc/profile.d/kul_nis_env.sh" "/etc/bash.bashrc")
+KUL_BLOCK_ALL_DESTS=("${KUL_BLOCK_USER_DESTS[@]}" "${KUL_BLOCK_SHARED_DESTS[@]}")
+
+kul_block_present_in() { grep -qF "$KUL_BLOCK_MARKER" "$1" 2>/dev/null; }
+
+# Every file that currently carries the block, one per line.
+kul_block_locations() {
+    local f
+    for f in "${KUL_BLOCK_ALL_DESTS[@]}"; do
+        kul_block_present_in "$f" && echo "$f"
+    done
+    return 0
+}
+
+kul_in_list() {
+    local needle="$1"; shift
+    local x
+    for x in "$@"; do [ "$x" = "$needle" ] && return 0; done
+    return 1
+}
+
+# Decided per-file rather than per-mode, so that a shared install driven by an
+# unprivileged account and a user install both do the right thing without the
+# caller having to know which files need root.
+kul_write_cmd() {
+    local f="$1"
+    if [ -e "$f" ]; then
+        [ -w "$f" ] && { echo ""; return 0; }
+    else
+        [ -w "$(dirname "$f")" ] && { echo ""; return 0; }
+    fi
+    echo "sudo"
+}
+
+# Delete the managed block (markers inclusive, plus any blank lines that
+# immediately preceded it, so repeated remove/append cycles don't accumulate
+# whitespace) from $1, in place, keeping a timestamped backup alongside.
+kul_block_strip() {
+    local f="$1" tmp sudo_
+    sudo_=$(kul_write_cmd "$f")
+    tmp=$(mktemp)
+    awk -v s="$KUL_BLOCK_MARKER" -v e="$KUL_BLOCK_MARKER_END" '
+        $0 == s              { inblk = 1; nb = 0; next }
+        inblk                { if ($0 == e) inblk = 0; next }
+        /^[[:space:]]*$/     { buf[nb++] = $0; next }
+                             { for (i = 0; i < nb; i++) print buf[i]; nb = 0; print }
+        END                  { for (i = 0; i < nb; i++) print buf[i] }
+    ' "$f" > "$tmp"
+    $sudo_ cp -a "$f" "$f.kulbak.$(date +%Y%m%d-%H%M%S)"
+    # 'cp' onto the existing path rather than 'mv' so the file keeps its own
+    # inode, owner and mode instead of inheriting mktemp's 0600 root-only ones.
+    $sudo_ cp "$tmp" "$f"
+    rm -f "$tmp"
+}
+
+kul_block_append() {
+    local f="$1" content="$2" sudo_
+    sudo_=$(kul_write_cmd "$f")
+    if [ -n "$sudo_" ]; then
+        printf '%s\n' "$content" | sudo tee -a "$f" >/dev/null
+        sudo chmod 644 "$f"
+    else
+        printf '%s\n' "$content" >> "$f"
     fi
 }
 
@@ -502,9 +587,40 @@ esac
 
 # ── Resolve mode / root / group — wizard if run bare in a real terminal ──────
 
+# Confirmed bug (found live): a completed *shared* install exports
+# SOFTWARE_ROOT from the very block it just wrote, so on every subsequent run
+# the "-z ${SOFTWARE_ROOT:-}" guard on the wizard below was false, the wizard
+# never ran, and INSTALL_MODE silently fell back to its "user" default -- which
+# appended a THIRD copy of the block to ~/.bashrc on a box that was already set
+# up shared, with nothing in the output saying the mode had flipped. Infer the
+# mode from where the block actually lives before falling back to anything.
+KUL_DETECTED_MODE=""
+if [ "$MODE_EXPLICIT" -eq 0 ]; then
+    _found_user=0
+    _found_shared=0
+    for _f in "${KUL_BLOCK_USER_DESTS[@]}";   do kul_block_present_in "$_f" && _found_user=1; done
+    for _f in "${KUL_BLOCK_SHARED_DESTS[@]}"; do kul_block_present_in "$_f" && _found_shared=1; done
+    if [ "$_found_shared" -eq 1 ] && [ "$_found_user" -eq 1 ]; then
+        KUL_DETECTED_MODE="shared"
+        warn "Managed environment block found in BOTH user and shared locations:"
+        kul_block_locations | sed 's/^/        /'
+        warn "That is the mode-flip bug above: every shell sources FreeSurfer/FSL \
+more than once and PATH carries duplicates. Assuming 'shared' -- pass '--mode user' \
+to choose otherwise. The bashrc section will keep the shared copies and remove the stray one."
+    elif [ "$_found_shared" -eq 1 ]; then
+        KUL_DETECTED_MODE="shared"
+    elif [ "$_found_user" -eq 1 ]; then
+        KUL_DETECTED_MODE="user"
+    fi
+    if [ -n "$KUL_DETECTED_MODE" ]; then
+        INSTALL_MODE="$KUL_DETECTED_MODE"
+        log "Detected an existing '$INSTALL_MODE' install from the managed block on disk"
+    fi
+fi
+
 WIZARD_RAN=0
-if [ "$MODE_EXPLICIT" -eq 0 ] && [ "$ROOT_EXPLICIT" -eq 0 ] && [ -z "${SOFTWARE_ROOT:-}" ] \
-   && [ -t 0 ] && [ "$DRY_RUN" -eq 0 ]; then
+if [ "$MODE_EXPLICIT" -eq 0 ] && [ "$ROOT_EXPLICIT" -eq 0 ] && [ -z "$KUL_DETECTED_MODE" ] \
+   && [ -z "${SOFTWARE_ROOT:-}" ] && [ -t 0 ] && [ "$DRY_RUN" -eq 0 ]; then
     WIZARD_RAN=1
     echo
     echo "  Who is this install for?"
@@ -2611,18 +2727,31 @@ see each script's existing 'docker run' invocation for the exact mount."
 # ── 11. Environment block — ~/.bashrc (user mode) or /etc/profile.d (shared) ──
 
 section_bashrc() {
-    local marker="# >>> KUL_NIS/KUL_VBG/KUL_FWT environment (managed block) >>>"
-    local marker_end="# <<< KUL_NIS/KUL_VBG/KUL_FWT environment (managed block) <<<"
+    local marker="$KUL_BLOCK_MARKER"
+    local marker_end="$KUL_BLOCK_MARKER_END"
     local src="$SOFTWARE_ROOT/src"
+    # First shared destination is the canonical one (it holds the body); any
+    # other shared destination gets a source shim pointing at it. Derived from
+    # the array rather than hardcoded so the two cannot drift apart.
+    local canonical="${KUL_BLOCK_SHARED_DESTS[0]}"
+
     # Confirmed bug (found live): /etc/profile.d/*.sh is only sourced by LOGIN
     # shells (SSH/console logins, 'bash -l') -- it is NOT sourced by the plain
     # interactive non-login shells that desktop terminal emulators actually
     # spawn (verified: 'bash -i' never saw it, only 'bash -l' did). Debian/
     # Ubuntu's bash package, however, DOES auto-source /etc/bash.bashrc for
     # every interactive shell regardless of login status -- that's the file
-    # that actually covers "just open a terminal." Shared mode now writes the
-    # same block to both: /etc/profile.d (covers real logins/some batch/PBS
-    # invocations) and /etc/bash.bashrc (covers ordinary desktop terminals).
+    # that actually covers "just open a terminal."
+    #
+    # Confirmed bug (found live, second order): the fix for that used to be
+    # writing the same block to BOTH files, on the assumption that they cover
+    # disjoint sets of shells. They do not. Debian/Ubuntu's /etc/profile
+    # sources /etc/bash.bashrc itself when $PS1 is set, so an interactive login
+    # shell reaches the body twice -- FreeSurfer's banner printed twice and
+    # PATH picked up two copies of everything before ~/.bashrc was even read.
+    # Shared mode now keeps exactly one copy of the body, in /etc/profile.d,
+    # and puts a one-line source shim in /etc/bash.bashrc; the body is written
+    # to be re-entrant so the remaining overlap is a no-op.
     local block_content
     block_content=$(cat <<EOF
 
@@ -2630,23 +2759,66 @@ $marker
 export SOFTWARE_ROOT="$SOFTWARE_ROOT"
 export CACHE_ROOT="$CACHE_ROOT"
 
+# Confirmed bug (found live): every entry below used to be added with a plain
+# 'export PATH="new:\$PATH"'. Because this block runs again in each nested
+# shell -- and twice over in an interactive login shell, see the note in
+# section_bashrc -- PATH grew without bound; a working session was routinely
+# carrying seven copies of the FreeSurfer directories. Add entries through
+# this instead: same order, but a no-op if the entry is already present.
+kul_path_prepend() {
+    case ":\${PATH}:" in
+        *":\$1:"*) ;;
+        *) PATH="\$1:\${PATH}" ;;
+    esac
+}
+
+# The vendor setup scripts sourced further down (FSL's fsl.sh, FreeSurfer's
+# FreeSurferEnv.sh, conda's activate-base hook) each extend PATH themselves and
+# none of them check what is already there -- FreeSurferEnv.sh appends FSL_BIN
+# at its line 469, which fsl.sh has usually just prepended, so a single clean
+# pass still ended up with two copies of \$FSLDIR/share/fsl/bin. Sweeping once
+# at the end, keeping the first occurrence, is simpler and more robust than
+# trying to out-guess all three. It also drops empty entries, which the shell
+# reads as "the current directory".
+kul_path_dedupe() {
+    local out="" e
+    local IFS=:
+    for e in \$PATH; do
+        [ -z "\$e" ] && continue
+        case ":\$out:" in
+            *":\$e:"*) ;;
+            *) out="\${out:+\$out:}\$e" ;;
+        esac
+    done
+    PATH="\$out"
+}
+
 # --- Conda / miniforge ---
-export PATH="\$SOFTWARE_ROOT/miniforge3/bin:\$PATH"
-# Confirmed bug (found live): plain 'source .../etc/profile.d/conda.sh' only
-# wires up the 'conda' function -- it does NOT auto-activate base the way a
-# standard 'conda init' setup does, because that auto-activation is baked
-# into the dynamically-generated output of 'conda shell.bash hook' itself
-# (ends in a literal "conda activate 'base'"), not into conda.sh. Using the
-# hook instead gives both the function AND the expected auto-activated base.
-eval "\$("\$SOFTWARE_ROOT/miniforge3/bin/conda" shell.bash hook)"
-# mamba has its own separate shell hook (completions + the 'mamba'/'micromamba'
-# functions; it does NOT duplicate conda's own activate-base call, so running
-# both is safe) -- without this, 'mamba activate' fails with "mamba is running
-# as a subprocess and can't modify the parent shell." Together these mean
-# either 'conda activate <env>' or 'mamba activate <env>' works interchangeably
-# (mamba is faster for create/install; activation itself is the same mechanism).
-if command -v mamba >/dev/null 2>&1; then
-    eval "\$(mamba shell hook --shell bash)"
+kul_path_prepend "\$SOFTWARE_ROOT/miniforge3/bin"
+# KUL_ENV_SOURCED is deliberately NOT exported. It suppresses a second pass
+# within the SAME shell (the /etc/profile -> /etc/bash.bashrc overlap), while
+# still letting every new nested shell run the hooks -- which it must, since
+# 'conda' and 'mamba' are shell functions and a child shell does not inherit
+# them. Everything else in this block is idempotent by construction, so only
+# the two expensive hook evals need the guard.
+if [ -z "\${KUL_ENV_SOURCED:-}" ]; then
+    # Confirmed bug (found live): plain 'source .../etc/profile.d/conda.sh' only
+    # wires up the 'conda' function -- it does NOT auto-activate base the way a
+    # standard 'conda init' setup does, because that auto-activation is baked
+    # into the dynamically-generated output of 'conda shell.bash hook' itself
+    # (ends in a literal "conda activate 'base'"), not into conda.sh. Using the
+    # hook instead gives both the function AND the expected auto-activated base.
+    eval "\$("\$SOFTWARE_ROOT/miniforge3/bin/conda" shell.bash hook)"
+    # mamba has its own separate shell hook (completions + the 'mamba'/'micromamba'
+    # functions; it does NOT duplicate conda's own activate-base call, so running
+    # both is safe) -- without this, 'mamba activate' fails with "mamba is running
+    # as a subprocess and can't modify the parent shell." Together these mean
+    # either 'conda activate <env>' or 'mamba activate <env>' works interchangeably
+    # (mamba is faster for create/install; activation itself is the same mechanism).
+    if command -v mamba >/dev/null 2>&1; then
+        eval "\$(mamba shell hook --shell bash)"
+    fi
+    KUL_ENV_SOURCED=1
 fi
 export CONDA_PKGS_DIRS="\$CACHE_ROOT/conda_pkgs"
 
@@ -2658,12 +2830,23 @@ export APPTAINER_TMPDIR="\$SOFTWARE_ROOT/tmp/apptainer"
 
 # --- FSL ---
 export FSLDIR="\$SOFTWARE_ROOT/src/FSL"
-[ -f "\$FSLDIR/etc/fslconf/fsl.sh" ] && source "\$FSLDIR/etc/fslconf/fsl.sh"
-export PATH="\$FSLDIR/share/fsl/bin:\$PATH"
+# fsl.sh and SetUpFreeSurfer.sh only export variables and extend PATH, and
+# FreeSurfer's prints a banner on the way through -- re-sourcing them in every
+# nested shell is what put the FreeSurfer header on screen more than once per
+# terminal. Everything they set is exported, so once per shell tree is enough;
+# these two flags ARE exported, unlike KUL_ENV_SOURCED above.
+if [ -z "\${KUL_FSL_SOURCED:-}" ] && [ -f "\$FSLDIR/etc/fslconf/fsl.sh" ]; then
+    . "\$FSLDIR/etc/fslconf/fsl.sh"
+    export KUL_FSL_SOURCED=1
+fi
+kul_path_prepend "\$FSLDIR/share/fsl/bin"
 
 # --- FreeSurfer ---
 export FREESURFER_HOME="\$SOFTWARE_ROOT/src/freesurfer"
-[ -f "\$FREESURFER_HOME/SetUpFreeSurfer.sh" ] && source "\$FREESURFER_HOME/SetUpFreeSurfer.sh"
+if [ -z "\${KUL_FS_SOURCED:-}" ] && [ -f "\$FREESURFER_HOME/SetUpFreeSurfer.sh" ]; then
+    . "\$FREESURFER_HOME/SetUpFreeSurfer.sh"
+    export KUL_FS_SOURCED=1
+fi
 export SUBJECTS_DIR="\$FREESURFER_HOME/subjects"
 export FS_LICENSE="\$FREESURFER_HOME/license.txt"
 
@@ -2672,7 +2855,7 @@ export FASTSURFER_HOME="\$SOFTWARE_ROOT/src/FastSurfer"
 
 # --- ANTs ---
 export ANTSPATH="\$SOFTWARE_ROOT/src/ANTs_install/bin"
-export PATH="\$ANTSPATH:\$PATH"
+kul_path_prepend "\$ANTSPATH"
 
 # --- MATLAB toolboxes (SPM12 now, conn etc. later) ---
 # Deliberately NOT on PATH: nothing here is an executable. These are MATLAB
@@ -2689,28 +2872,68 @@ export KUL_apps_DIR="\$KUL_MATLAB_APPS"
 # --- CUDA Toolkit (only if installed -- see the nvidia section) ---
 if [ -d /usr/local/cuda ]; then
     export CUDA_HOME=/usr/local/cuda
-    export PATH="/usr/local/cuda/bin:\$PATH"
-    export LD_LIBRARY_PATH="/usr/local/cuda/lib64:\${LD_LIBRARY_PATH:-}"
+    kul_path_prepend /usr/local/cuda/bin
+    # Confirmed bug (found live): this was
+    # LD_LIBRARY_PATH="/usr/local/cuda/lib64:\${LD_LIBRARY_PATH:-}". On the
+    # common case of LD_LIBRARY_PATH being unset that expands to a TRAILING
+    # COLON, which the dynamic loader reads as "also search the current
+    # directory" -- so any cwd containing a stray libfoo.so silently shadowed
+    # the system one. \${VAR:+:\$VAR} appends the separator only when
+    # there is something to separate.
+    case ":\${LD_LIBRARY_PATH:-}:" in
+        *":/usr/local/cuda/lib64:"*) ;;
+        *) export LD_LIBRARY_PATH="/usr/local/cuda/lib64\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}" ;;
+    esac
 fi
 
 # --- mrtrix3 ---
-export PATH="\$SOFTWARE_ROOT/src/mrtrix3/bin:\$PATH"
-export PYTHONPATH="\$SOFTWARE_ROOT/src/mrtrix3/lib:\${PYTHONPATH:-}"
+kul_path_prepend "\$SOFTWARE_ROOT/src/mrtrix3/bin"
+# Same trailing-colon bug as LD_LIBRARY_PATH above, and worse: an empty entry
+# in PYTHONPATH puts the current working directory on sys.path for every
+# Python process on the box.
+case ":\${PYTHONPATH:-}:" in
+    *":\$SOFTWARE_ROOT/src/mrtrix3/lib:"*) ;;
+    *) export PYTHONPATH="\$SOFTWARE_ROOT/src/mrtrix3/lib\${PYTHONPATH:+:\$PYTHONPATH}" ;;
+esac
 
 # --- shard-recon (external mrtrix3 module, dwimotioncorrect/mssh2amp) ---
-export PATH="\$SOFTWARE_ROOT/src/shard-recon/bin:\$PATH"
+kul_path_prepend "\$SOFTWARE_ROOT/src/shard-recon/bin"
 
 # --- ITK-SNAP ---
-export PATH="\$SOFTWARE_ROOT/src/itksnap/bin:\$PATH"
+kul_path_prepend "\$SOFTWARE_ROOT/src/itksnap/bin"
 
 # --- PsychoPy Studio ---
-export PATH="\$SOFTWARE_ROOT/src/psychopy:\$PATH"
+kul_path_prepend "\$SOFTWARE_ROOT/src/psychopy"
 
 # --- AFNI ---
-export PATH="\$SOFTWARE_ROOT/src/afni:\$PATH"
+kul_path_prepend "\$SOFTWARE_ROOT/src/afni"
 
 # --- KUL_NIS / KUL_VBG / KUL_FWT / KUL_DTI_ALPS on PATH ---
-export PATH="$src/KUL_NIS:$src/KUL_VBG:$src/KUL_FWT:$src/KUL_NIS/KUL_DTI_ALPS:\$PATH"
+# Prepended in reverse so the resulting order matches the list as written.
+kul_path_prepend "$src/KUL_NIS/KUL_DTI_ALPS"
+kul_path_prepend "$src/KUL_FWT"
+kul_path_prepend "$src/KUL_VBG"
+kul_path_prepend "$src/KUL_NIS"
+
+kul_path_dedupe
+export PATH
+$marker_end
+EOF
+)
+
+    local shim_content
+    shim_content=$(cat <<EOF
+
+$marker
+# The body of this block lives in $canonical and is
+# deliberately NOT duplicated here. /etc/profile.d/*.sh is read only by LOGIN
+# shells, while desktop terminal emulators spawn interactive NON-login shells
+# that Ubuntu's bash serves from this file instead -- so both entry points are
+# needed, but only one copy of the content. Note that /etc/profile also
+# sources this file when \$PS1 is set, so an interactive login shell reaches
+# the body twice; kul_path_prepend and the KUL_*_SOURCED guards inside it make
+# that second pass a no-op.
+[ -f $canonical ] && . $canonical
 $marker_end
 EOF
 )
@@ -2759,38 +2982,65 @@ this script only adds its own managed block below."
 
     local dests=()
     if [ "$INSTALL_MODE" = "shared" ]; then
-        dests=("/etc/profile.d/kul_nis_env.sh" "/etc/bash.bashrc")
+        dests=("${KUL_BLOCK_SHARED_DESTS[@]}")
     else
-        dests=("$HOME/.bashrc")
+        dests=("${KUL_BLOCK_USER_DESTS[@]}")
     fi
 
-    for dest in "${dests[@]}"; do
-        if grep -qF "$marker" "$dest" 2>/dev/null; then
-            ok "$dest already has the managed environment block — not touching it. \
-Edit it by hand, or delete the block between the marker lines and re-run this section."
-            continue
-        fi
-        log "Appending environment block to $dest"
+    # Confirmed bug (found live): the old guard was "if the file I am about to
+    # write already has the marker, skip it". That could neither notice copies
+    # left behind in the OTHER mode's locations (so a user-mode re-run after a
+    # shared install left three live copies), nor refresh a stale one -- "not
+    # touching it" froze /etc at whatever script version first ran, while later
+    # runs appended a NEWER block elsewhere. On this box that silently split
+    # the environment: KUL_MATLAB_APPS and shard-recon existed only in the
+    # ~/.bashrc copy, so they were missing from every SSH login. Now: prune
+    # every location that is not a destination for this mode, and replace
+    # rather than skip in the ones that are.
+    local f content
+    for f in "${KUL_BLOCK_ALL_DESTS[@]}"; do
+        kul_in_list "$f" "${dests[@]}" && continue
+        kul_block_present_in "$f" || continue
+        warn "Removing stale managed block from $f (this install is '$INSTALL_MODE' mode)"
         if [ "$DRY_RUN" -eq 1 ]; then
-            echo "    [dry-run] would append the managed environment block to $dest"
+            echo "    [dry-run] would remove the managed block from $f"
             continue
         fi
-        if [ "$INSTALL_MODE" = "shared" ]; then
-            echo "$block_content" | sudo tee -a "$dest" >/dev/null
-            sudo chmod 644 "$dest"
-        else
-            echo "$block_content" >> "$dest"
+        kul_block_strip "$f"
+        ok "$f cleaned (backup alongside as $(basename "$f").kulbak.*)"
+    done
+
+    for f in "${dests[@]}"; do
+        content="$block_content"
+        if [ "$INSTALL_MODE" = "shared" ] && [ "$f" != "$canonical" ]; then
+            content="$shim_content"
         fi
-        ok "$dest updated"
+        if kul_block_present_in "$f"; then
+            log "Refreshing managed environment block in $f"
+            if [ "$DRY_RUN" -eq 1 ]; then
+                echo "    [dry-run] would replace the managed block in $f"
+                continue
+            fi
+            kul_block_strip "$f"
+        else
+            log "Appending environment block to $f"
+            if [ "$DRY_RUN" -eq 1 ]; then
+                echo "    [dry-run] would append the managed block to $f"
+                continue
+            fi
+        fi
+        kul_block_append "$f" "$content"
+        ok "$f updated"
     done
 
     if [ "$DRY_RUN" -eq 0 ]; then
         if [ "$INSTALL_MODE" = "shared" ]; then
-            ok "New terminals (via /etc/bash.bashrc) and real logins (via /etc/profile.d) both pick \
-this up automatically from their next start; 'source /etc/bash.bashrc' to pick it up in the current one."
+            ok "Body in $canonical, one-line source shim in the rest. New terminals \
+and real logins both pick this up from their next start; 'source $canonical' for the current one."
         else
             ok "Run 'source ~/.bashrc' or open a new shell to pick it up."
         fi
+        ok "Blocks now on disk: $(kul_block_locations | tr '\n' ' ')"
     fi
 }
 
@@ -3070,15 +3320,35 @@ run 'sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restar
 
     echo
     echo "  -- shell integration --"
-    _profile_dests=("$HOME/.bashrc")
-    [ "$INSTALL_MODE" = "shared" ] && _profile_dests=("/etc/profile.d/kul_nis_env.sh" "/etc/bash.bashrc")
-    for _profile_dest in "${_profile_dests[@]}"; do
-        if grep -qF "# >>> KUL_NIS/KUL_VBG/KUL_FWT environment (managed block) >>>" "$_profile_dest" 2>/dev/null; then
-            vok "$_profile_dest" "managed environment block present"
-        else
-            vwarn "$_profile_dest" "managed block not found — run the bashrc section (or add it by hand if you deliberately skipped it, e.g. on a machine with pre-existing FSL/ANTs/FreeSurfer/mrtrix3)"
-        fi
-    done
+    # Confirmed bug (found live): this used to derive the list of files to check
+    # from INSTALL_MODE and then test each only for PRESENCE of the marker. A
+    # box carrying the block in ~/.bashrc *and* both /etc files therefore
+    # verified perfectly clean while every shell sourced FreeSurfer and FSL
+    # three times over. Scan all known locations and treat an unexpected count
+    # as a failure, not a pass.
+    _found_blocks="$(kul_block_locations)"
+    _n_blocks=$(printf '%s\n' "$_found_blocks" | grep -c . || true)
+    _expected_blocks=1
+    [ "$INSTALL_MODE" = "shared" ] && _expected_blocks=2   # body in profile.d + shim in bash.bashrc
+    if [ "$_n_blocks" -eq 0 ]; then
+        vwarn "shell env" "managed block not found in any of: ${KUL_BLOCK_ALL_DESTS[*]} — run the bashrc section (or add it by hand if you deliberately skipped it, e.g. on a machine with pre-existing FSL/ANTs/FreeSurfer/mrtrix3)"
+    else
+        while IFS= read -r _profile_dest; do
+            [ -n "$_profile_dest" ] && vok "$_profile_dest" "managed environment block present"
+        done <<< "$_found_blocks"
+    fi
+    if [ "$_n_blocks" -gt "$_expected_blocks" ]; then
+        vfail "shell env" "managed block found in $_n_blocks files, expected $_expected_blocks for '$INSTALL_MODE' mode — FreeSurfer/FSL are being sourced more than once per shell; run '--only bashrc' to de-duplicate"
+    fi
+
+    # Cheap end-to-end check on the result: even with one block per file, a
+    # non-idempotent PATH export would still show up here.
+    _dupe_path=$(printf '%s' "$PATH" | tr ':' '\n' | sort | uniq -d | grep -c . || true)
+    if [ "${_dupe_path:-0}" -gt 0 ]; then
+        vwarn "PATH" "$_dupe_path duplicated entries in the PATH this script inherited — expected until you open a fresh terminal; if it survives that, the block is still in more than one file"
+    else
+        vok "PATH" "no duplicate entries"
+    fi
 
     echo
     echo "  ────────────────────────────────────────────────────────────"

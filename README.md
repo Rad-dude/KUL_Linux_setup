@@ -35,8 +35,16 @@ completed sections check for their own output and are cheap to skip, so it is
 safe to re-run after fixing a failure partway through.
 
 It does modify the system — apt packages, Docker, CUDA/NVIDIA driver bits, and a
-managed block in `~/.bashrc` (or `/etc/bash.bashrc` + `/etc/profile.d` in shared
-mode). Everything under `$SOFTWARE_ROOT` is self-contained and easy to delete,
+managed environment block, written to `~/.bashrc` in user mode or to
+`/etc/profile.d/kul_nis_env.sh` in shared mode (with a one-line source shim in
+`/etc/bash.bashrc`, since `/etc/profile.d` is only read by login shells and
+desktop terminals spawn non-login ones). The `bashrc` section owns that block:
+it works out which mode the machine is already in from what is on disk, refreshes
+a stale block in place, and removes copies left behind in the other mode's
+locations, keeping backups as `<file>.kulbak.<timestamp>`. Exactly one live copy
+of the body is the invariant — a second one makes every shell source FreeSurfer
+and FSL twice and leaves PATH full of duplicates — and `--only verify` fails if
+it finds more. Everything under `$SOFTWARE_ROOT` is self-contained and easy to delete,
 with one exception: FreeSurfer is a real system install, because upstream ships
 only `.deb`/`.rpm` with no relocatable option since 8.0. `$SOFTWARE_ROOT/src/freesurfer`
 is a symlink to wherever apt put it.
