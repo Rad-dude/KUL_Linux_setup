@@ -1,0 +1,1266 @@
+<meta charset="UTF-8">
+<title>KUL_software Codebase Map</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root {
+    --bg: #f5f4f0;
+    --surface: #ffffff;
+    --surface-2: #ecebe5;
+    --border: #d9d7cf;
+    --ink: #1b1f2a;
+    --muted: #6b7280;
+    --muted-2: #8a90a0;
+    --accent: #0f8a76;
+    --accent-ink: #ffffff;
+    --proj-nis: #4a5064;
+    --proj-vbg: #b8791f;
+    --proj-fwt: #6b4fc4;
+    --tool-chip-bg: #eceae2;
+    --tool-chip-ink: #55524a;
+    --dev-stripe: #b6521f;
+    --edge: #b9b6ac;
+    --shadow: 0 8px 24px -12px rgba(20, 20, 30, 0.25);
+    --radius: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12141a;
+      --surface: #191c24;
+      --surface-2: #20232c;
+      --border: #2c303b;
+      --ink: #e8e9ec;
+      --muted: #9aa1ad;
+      --muted-2: #6f7684;
+      --accent: #34d0b6;
+      --accent-ink: #0b1512;
+      --proj-nis: #aab0c0;
+      --proj-vbg: #e0ab4a;
+      --proj-fwt: #a68ef0;
+      --tool-chip-bg: #262a34;
+      --tool-chip-ink: #c3c7d1;
+      --dev-stripe: #e0824a;
+      --edge: #3a3f4c;
+      --shadow: 0 8px 28px -12px rgba(0, 0, 0, 0.6);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12141a;
+    --surface: #191c24;
+    --surface-2: #20232c;
+    --border: #2c303b;
+    --ink: #e8e9ec;
+    --muted: #9aa1ad;
+    --muted-2: #6f7684;
+    --accent: #34d0b6;
+    --accent-ink: #0b1512;
+    --proj-nis: #aab0c0;
+    --proj-vbg: #e0ab4a;
+    --proj-fwt: #a68ef0;
+    --tool-chip-bg: #262a34;
+    --tool-chip-ink: #c3c7d1;
+    --dev-stripe: #e0824a;
+    --edge: #3a3f4c;
+    --shadow: 0 8px 28px -12px rgba(0, 0, 0, 0.6);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Archivo", system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .mono { font-family: "IBM Plex Mono", ui-monospace, "SF Mono", monospace; }
+
+  header {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+  }
+  header h1 {
+    font-size: 16px;
+    font-weight: 700;
+    margin: 0;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+  }
+  header .sub {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 2px;
+  }
+  .titleblock { min-width: 220px; }
+  .stats { display: flex; gap: 10px; margin-left: auto; flex-wrap: wrap; }
+  .stat {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 6px 12px;
+    text-align: center;
+    min-width: 74px;
+  }
+  .stat .n {
+    font-family: "IBM Plex Mono", monospace;
+    font-weight: 600;
+    font-size: 16px;
+    font-variant-numeric: tabular-nums;
+    display: block;
+  }
+  .stat .l {
+    font-size: 10px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .layout {
+    flex: 1 1 auto;
+    display: flex;
+    min-height: 0;
+  }
+
+  aside.left {
+    width: 246px;
+    flex: 0 0 auto;
+    border-right: 1px solid var(--border);
+    background: var(--surface);
+    overflow-y: auto;
+    padding: 14px 16px 24px;
+  }
+  aside.left h2 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    margin: 18px 0 8px;
+    font-weight: 600;
+  }
+  aside.left h2:first-child { margin-top: 0; }
+  .search-box {
+    width: 100%;
+    padding: 7px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-2);
+    color: var(--ink);
+    font-size: 13px;
+    font-family: inherit;
+  }
+  .search-box:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  #search-results {
+    margin-top: 6px;
+    max-height: 160px;
+    overflow-y: auto;
+    border-radius: 8px;
+  }
+  .search-result {
+    padding: 5px 8px;
+    font-size: 12px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .search-result:hover, .search-result.active { background: var(--surface-2); }
+  .search-result .basename { font-family: "IBM Plex Mono", monospace; }
+
+  label.filter-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12.5px;
+    padding: 4px 2px;
+    cursor: pointer;
+    border-radius: 6px;
+  }
+  label.filter-row:hover { background: var(--surface-2); }
+  label.filter-row input { accent-color: var(--accent); }
+  .swatch { width: 10px; height: 10px; border-radius: 3px; flex: 0 0 auto; }
+
+  .legend-item { display: flex; align-items: flex-start; gap: 8px; font-size: 11.5px; color: var(--muted); padding: 3px 2px; line-height: 1.4; }
+  .legend-mark { flex: 0 0 auto; margin-top: 2px; }
+
+  main.canvas-wrap {
+    flex: 1 1 auto;
+    position: relative;
+    min-width: 0;
+    background:
+      radial-gradient(circle at 1px 1px, var(--border) 1px, transparent 0) 0 0 / 22px 22px;
+  }
+  svg#graph { width: 100%; height: 100%; display: block; cursor: grab; }
+  svg#graph.dragging { cursor: grabbing; }
+
+  .node-label {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 9.5px;
+    fill: var(--ink);
+    pointer-events: none;
+    paint-order: stroke;
+    stroke: var(--bg);
+    stroke-width: 3px;
+    stroke-linejoin: round;
+  }
+  .node-circle { cursor: pointer; stroke-width: 1.4px; }
+  .node-circle.entrypoint { stroke: var(--ink); }
+  .node-circle.helper { stroke: none; opacity: 0.88; }
+  .node-circle.utility { stroke: var(--muted-2); stroke-dasharray: 2 1.5; }
+  .node-circle.dev { stroke: var(--dev-stripe); stroke-dasharray: 3 2; opacity: 0.55; }
+  .node-circle.selected { stroke: var(--accent); stroke-width: 3px; }
+
+  .edge-line { fill: none; stroke: var(--edge); }
+  .edge-line.invokes { stroke-width: 1.1px; }
+  .edge-line.sources { stroke-width: 1px; stroke-dasharray: 1 3; stroke-linecap: round; }
+  .edge-line.imports { stroke-width: 1px; stroke-dasharray: 4 2; }
+  .edge-line.invokes_cross_project { stroke: var(--accent); stroke-width: 2px; }
+  .edge-line.dim { opacity: 0.06; }
+  .edge-line.highlight { stroke: var(--accent); opacity: 1 !important; stroke-width: 2.2px; }
+
+  .zoom-controls {
+    position: absolute;
+    right: 16px;
+    bottom: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .zoom-controls button, .reheat-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--ink);
+    font-size: 16px;
+    cursor: pointer;
+    box-shadow: var(--shadow);
+  }
+  .reheat-btn {
+    position: absolute;
+    left: 16px;
+    bottom: 16px;
+    width: auto;
+    padding: 0 12px;
+    font-size: 12px;
+    font-family: "Archivo", sans-serif;
+  }
+  .hint {
+    position: absolute;
+    top: 12px;
+    left: 16px;
+    font-size: 11px;
+    color: var(--muted);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 5px 10px;
+    border-radius: 8px;
+    box-shadow: var(--shadow);
+  }
+
+  .drilldown {
+    position: absolute;
+    inset: 0;
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    z-index: 4;
+  }
+  .drilldown.hidden { display: none; }
+  .dd-header {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    flex: 0 0 auto;
+  }
+  .dd-back {
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--ink);
+    border-radius: 7px;
+    padding: 6px 12px;
+    font-size: 12.5px;
+    font-family: "Archivo", sans-serif;
+    cursor: pointer;
+    flex: 0 0 auto;
+  }
+  .dd-back:hover { border-color: var(--accent); }
+  .dd-title { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+  .dd-title .mono { font-size: 15px; font-weight: 600; }
+  .dd-title span:last-child { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dd-hint {
+    font-size: 11px;
+    color: var(--muted);
+    padding: 7px 18px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface-2);
+    flex: 0 0 auto;
+  }
+  .dd-scroll { flex: 1 1 auto; overflow: auto; display: flex; justify-content: center; }
+  #drill-svg { display: block; flex: 0 0 auto; }
+  .dd-node-fn rect { fill: var(--surface-2); stroke: var(--ink); stroke-width: 1.2px; }
+  .dd-node-fn.selected rect { stroke: var(--accent); stroke-width: 2.4px; }
+  .dd-node-fn text { font-family: "IBM Plex Mono", monospace; font-size: 11px; fill: var(--ink); }
+  .dd-node-target rect { fill: var(--tool-chip-bg); stroke: none; }
+  .dd-node-target.kind-code rect { stroke: var(--ink); stroke-width: 1.2px; }
+  .dd-node-target.kind-data rect { fill: transparent; stroke: var(--dev-stripe); stroke-width: 1.2px; stroke-dasharray: 3 2; }
+  .dd-node-target text { font-family: "IBM Plex Mono", monospace; font-size: 10.5px; fill: var(--tool-chip-ink); }
+  .dd-node-target.kind-code text, .dd-node-target.kind-data text { fill: var(--ink); }
+  .dd-node-target.kind-code { cursor: pointer; }
+  .dd-node-target.kind-code:hover rect { stroke: var(--accent); }
+  .dd-edge { fill: none; stroke: var(--edge); stroke-width: 1.3px; }
+  .dd-edge.fn2fn { stroke-dasharray: 2 2; }
+  .dd-edge.dim { opacity: 0.12; }
+  .dd-edge.highlight { stroke: var(--accent); stroke-width: 2px; opacity: 1; }
+  .dd-lane-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    fill: var(--muted);
+    font-family: "Archivo", sans-serif;
+  }
+  .dd-empty { padding: 40px; text-align: center; color: var(--muted); font-size: 13px; }
+  .view-internal-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    padding: 9px;
+    margin: 12px 0 4px;
+    border-radius: 8px;
+    border: 1px solid var(--accent);
+    background: transparent;
+    color: var(--accent);
+    font-family: "Archivo", sans-serif;
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .view-internal-btn:hover { background: var(--accent); color: var(--accent-ink); }
+
+  aside.right {
+    width: 340px;
+    flex: 0 0 auto;
+    border-left: 1px solid var(--border);
+    background: var(--surface);
+    overflow-y: auto;
+    padding: 18px 18px 30px;
+    transform: translateX(0);
+  }
+  aside.right.empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+    font-size: 12.5px;
+    text-align: center;
+    padding: 30px;
+  }
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    padding: 2px 8px;
+    border-radius: 100px;
+    color: white;
+  }
+  .badge.outline {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 500;
+  }
+  .detail-path {
+    font-size: 11.5px;
+    color: var(--muted);
+    word-break: break-all;
+    margin: 6px 0 14px;
+  }
+  .detail-name {
+    font-size: 17px;
+    font-weight: 600;
+    word-break: break-word;
+    margin: 10px 0 4px;
+  }
+  .badges-row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 4px; }
+  .detail-section { margin-top: 18px; }
+  .detail-section h3 {
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+    margin: 0 0 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .link-row {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 6px 9px;
+    font-size: 12px;
+    font-family: "IBM Plex Mono", monospace;
+    color: var(--ink);
+    cursor: pointer;
+    margin-bottom: 5px;
+  }
+  .link-row:hover { border-color: var(--accent); }
+  .link-row .line-no { color: var(--muted); font-family: "Archivo", sans-serif; float: right; font-size: 10.5px; }
+  .purpose-box {
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: var(--ink);
+    background: var(--surface-2);
+    border-radius: 8px;
+    padding: 9px 11px;
+    margin-bottom: 10px;
+  }
+  .chip {
+    display: inline-block;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px;
+    background: var(--tool-chip-bg);
+    color: var(--tool-chip-ink);
+    padding: 3px 8px;
+    border-radius: 6px;
+    margin: 0 5px 5px 0;
+    flex: 0 0 auto;
+  }
+  .tool-row {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 5px;
+    flex-wrap: wrap;
+  }
+  .tool-desc {
+    font-size: 11.5px;
+    color: var(--muted);
+    line-height: 1.4;
+    flex: 1 1 160px;
+  }
+  .toolkit-group { margin-bottom: 12px; }
+  .toolkit-group .tk-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 5px; }
+  .fnlist { font-family: "IBM Plex Mono", monospace; font-size: 11.5px; color: var(--muted); line-height: 1.9; word-break: break-word; }
+  .note-box {
+    font-size: 11.5px;
+    color: var(--muted);
+    background: var(--surface-2);
+    border-left: 3px solid var(--dev-stripe);
+    padding: 7px 10px;
+    border-radius: 4px;
+    margin-bottom: 6px;
+    line-height: 1.5;
+  }
+  .empty-note { font-size: 11.5px; color: var(--muted-2); font-style: italic; }
+
+  ::-webkit-scrollbar { width: 9px; height: 9px; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+  }
+
+  @media (max-width: 900px) {
+    aside.left { display: none; }
+    aside.right { position: absolute; right: 0; top: 0; bottom: 0; z-index: 5; box-shadow: var(--shadow); }
+  }
+</style>
+
+<script type="application/json" id="graph-data">%%GRAPH_JSON%%</script>
+
+<header>
+  <div class="titleblock">
+    <h1>KUL_software codebase map</h1>
+    <div class="sub">KUL_NIS &middot; KUL_VBG &middot; KUL_FWT &mdash; regex-extracted call graph</div>
+  </div>
+  <div class="stats" id="stats"></div>
+</header>
+
+<div class="layout">
+  <aside class="left">
+    <h2>Find</h2>
+    <input class="search-box" id="search" type="text" placeholder="Search files, functions, tools&hellip;" autocomplete="off">
+    <div id="search-results"></div>
+
+    <h2>Projects</h2>
+    <label class="filter-row"><input type="checkbox" data-proj="KUL_NIS" checked><span class="swatch" style="background:var(--proj-nis)"></span>KUL_NIS <span style="color:var(--muted); margin-left:auto" class="mono" id="cnt-KUL_NIS"></span></label>
+    <label class="filter-row"><input type="checkbox" data-proj="KUL_VBG" checked><span class="swatch" style="background:var(--proj-vbg)"></span>KUL_VBG <span style="color:var(--muted); margin-left:auto" class="mono" id="cnt-KUL_VBG"></span></label>
+    <label class="filter-row"><input type="checkbox" data-proj="KUL_FWT" checked><span class="swatch" style="background:var(--proj-fwt)"></span>KUL_FWT <span style="color:var(--muted); margin-left:auto" class="mono" id="cnt-KUL_FWT"></span></label>
+
+    <h2>Edge types</h2>
+    <label class="filter-row"><input type="checkbox" data-edge="invokes" checked>calls / invokes</label>
+    <label class="filter-row"><input type="checkbox" data-edge="invokes_cross_project" checked>cross-project call</label>
+    <label class="filter-row"><input type="checkbox" data-edge="sources" checked>sources (bash)</label>
+    <label class="filter-row"><input type="checkbox" data-edge="imports" checked>imports (python)</label>
+
+    <h2>Other</h2>
+    <label class="filter-row"><input type="checkbox" id="hide-dev">Hide dev / deprecated</label>
+    <label class="filter-row"><input type="checkbox" id="hide-isolated">Hide isolated files</label>
+
+    <h2>Legend</h2>
+    <div class="legend-item"><span class="legend-mark mono">&#9679;</span>Circle size = in+out call degree</div>
+    <div class="legend-item"><span class="legend-mark">&#9711;</span>Solid ring = entry-point (has Usage/getopts)</div>
+    <div class="legend-item"><span class="legend-mark">&#9678;</span>Dashed grey ring = utility / minimal script</div>
+    <div class="legend-item"><span class="legend-mark" style="color:var(--dev-stripe)">&#9678;</span>Dashed orange ring, faded = dev / deprecated / backup</div>
+    <div class="legend-item"><span class="legend-mark" style="color:var(--accent)">&#8213;</span>Teal edge = crosses KUL_NIS&harr;KUL_VBG/FWT boundary</div>
+    <div class="legend-item">Labels: shown always only for the top ~10% most-connected files; everything else on hover/click, or once you zoom in past ~1.6&times;.</div>
+    <div class="legend-item">Click a node for its purpose, functions, calls, and exactly which external tools it runs (and what each one does). Drag nodes to rearrange; scroll to zoom.</div>
+  </aside>
+
+  <main class="canvas-wrap">
+    <div class="hint" id="main-hint">Only hub files are labeled by default &mdash; hover any node for a quick tooltip, click for full detail, or zoom in to reveal more labels.</div>
+    <svg id="graph"></svg>
+    <div class="zoom-controls" id="zoom-controls">
+      <button id="zoom-in" title="Zoom in">+</button>
+      <button id="zoom-out" title="Zoom out">&minus;</button>
+      <button id="zoom-reset" title="Reset view">&#8962;</button>
+    </div>
+    <button class="reheat-btn" id="reheat">&#8635; Re-layout</button>
+
+    <div class="drilldown hidden" id="drilldown">
+      <div class="dd-header">
+        <button class="dd-back" id="dd-back">&larr; Back to full map</button>
+        <div class="dd-title">
+          <span class="mono" id="dd-name"></span>
+          <span id="dd-purpose"></span>
+        </div>
+      </div>
+      <div class="dd-hint">Steps are grouped by function, top to bottom in source-line order &mdash; not a true control-flow trace (branches/loops/backgrounded steps all read as sequence). Click a file on the right to jump to it.</div>
+      <div class="dd-scroll" id="dd-scroll"><svg id="drill-svg"></svg></div>
+    </div>
+  </main>
+
+  <aside class="right empty" id="detail">
+    Click any node to see its functions, what it calls, and the external tools it depends on.
+  </aside>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var RAW = JSON.parse(document.getElementById("graph-data").textContent);
+  var ALL_NODES = RAW.nodes;
+  var ALL_EDGES = RAW.edges;
+  var MANUAL_EDGES = RAW.edges.filter(function (e) { return e.source === "manual" && e.type !== "provides"; });
+
+  var byId = {};
+  ALL_NODES.forEach(function (n) { byId[n.id] = n; });
+  var toolDesc = {};
+  ALL_NODES.forEach(function (n) { if (n.type === "external_tool") toolDesc[n.name] = n.description; });
+
+  var codeNodes = ALL_NODES.filter(function (n) { return n.type === "code"; });
+  var codeIds = {};
+  codeNodes.forEach(function (n) { codeIds[n.id] = true; });
+
+  var CODE_EDGE_TYPES = ["invokes", "invokes_cross_project", "sources", "imports"];
+  var codeEdges = ALL_EDGES.filter(function (e) {
+    return CODE_EDGE_TYPES.indexOf(e.type) !== -1 && codeIds[e.src] && codeIds[e.dst] && e.src !== e.dst;
+  });
+
+  // de-duplicate parallel edges of the same (src,dst,type) -- keep first, remember count
+  var edgeKey = function (e) { return e.src + "" + e.dst + "" + e.type; };
+  var edgeSeen = {};
+  var edges = [];
+  codeEdges.forEach(function (e) {
+    var k = edgeKey(e);
+    if (edgeSeen[k]) { edgeSeen[k].count++; return; }
+    var copy = { src: e.src, dst: e.dst, type: e.type, count: 1, lines: [e.line] };
+    edgeSeen[k] = copy;
+    edges.push(copy);
+  });
+  codeEdges.forEach(function (e) {
+    var k = edgeKey(e);
+    if (edgeSeen[k].lines.indexOf(e.line) === -1 && edgeSeen[k].lines[0] !== e.line) edgeSeen[k].lines.push(e.line);
+  });
+
+  // per-node aggregates for the detail panel
+  var outgoingAll = {}, incomingAll = {};
+  codeNodes.forEach(function (n) { outgoingAll[n.id] = []; incomingAll[n.id] = []; });
+  edges.forEach(function (e) {
+    outgoingAll[e.src].push(e);
+    incomingAll[e.dst].push(e);
+  });
+  var toolCalls = {}, envUses = {}, libImports = {}, altWarnings = {};
+  codeNodes.forEach(function (n) { toolCalls[n.id] = {}; envUses[n.id] = {}; libImports[n.id] = {}; });
+  ALL_EDGES.forEach(function (e) {
+    if (!codeIds[e.src]) return;
+    if (e.type === "calls_tool") {
+      var tk = e.toolkit || "other";
+      toolCalls[e.src][tk] = toolCalls[e.src][tk] || {};
+      toolCalls[e.src][tk][e.dst.replace("tool:", "")] = true;
+    } else if (e.type === "uses_env") {
+      envUses[e.src][e.dst.replace("env:", "")] = true;
+    } else if (e.type === "imports_lib") {
+      libImports[e.src][e.dst.replace("pylib:", "")] = true;
+    }
+    if (e.alt_targets) {
+      altWarnings[e.src] = altWarnings[e.src] || [];
+      altWarnings[e.src].push({ dst: e.dst, alts: e.alt_targets });
+    }
+  });
+  var dynamicNotes = {};
+  MANUAL_EDGES.forEach(function (e) {
+    dynamicNotes[e.src] = dynamicNotes[e.src] || [];
+    dynamicNotes[e.src].push(e);
+  });
+
+  var degree = {};
+  codeNodes.forEach(function (n) { degree[n.id] = 0; });
+  edges.forEach(function (e) { degree[e.src] = (degree[e.src] || 0) + 1; degree[e.dst] = (degree[e.dst] || 0) + 1; });
+
+  // ---- layout: simple force simulation with per-project cluster anchors ----
+  var W = 1900, H = 1200;
+  var anchors = {
+    KUL_NIS: { x: W * 0.5, y: H * 0.40 },
+    KUL_VBG: { x: W * 0.18, y: H * 0.80 },
+    KUL_FWT: { x: W * 0.82, y: H * 0.80 }
+  };
+  codeNodes.forEach(function (n) {
+    var a = anchors[n.project] || { x: W / 2, y: H / 2 };
+    n.x = a.x + (Math.random() - 0.5) * 260;
+    n.y = a.y + (Math.random() - 0.5) * 260;
+    n.vx = 0; n.vy = 0;
+  });
+
+  function radius(n) {
+    var d = degree[n.id] || 0;
+    return Math.max(4, Math.min(15, 4 + Math.sqrt(d) * 2.6));
+  }
+  // Label visibility is deliberately conservative by default -- with 123
+  // nodes, showing a label for every node above a low degree threshold
+  // (the original behavior) buried the graph in overlapping text. Now:
+  // only genuine hubs (top ~10% by degree) label unprompted; everything
+  // else reveals its label on hover/selection, or once zoomed in enough
+  // that crowding stops being a problem.
+  var degreesSorted = codeNodes.map(function (n) { return degree[n.id] || 0; }).sort(function (a, b) { return b - a; });
+  var hubThreshold = degreesSorted[Math.max(0, Math.floor(codeNodes.length * 0.1) - 1)] || 999;
+  function alwaysLabel(n) { return (degree[n.id] || 0) >= hubThreshold && hubThreshold > 2; }
+
+  function simulate(iterations) {
+    var nodes = codeNodes;
+    var k = 6800;
+    for (var it = 0; it < iterations; it++) {
+      for (var i = 0; i < nodes.length; i++) {
+        var a = nodes[i];
+        var fx = 0, fy = 0;
+        for (var j = 0; j < nodes.length; j++) {
+          if (i === j) continue;
+          var b = nodes[j];
+          var dx = a.x - b.x, dy = a.y - b.y;
+          var dist2 = dx * dx + dy * dy + 0.01;
+          var dist = Math.sqrt(dist2);
+          var force = k / dist2;
+          fx += (dx / dist) * force;
+          fy += (dy / dist) * force;
+        }
+        var anchor = anchors[a.project] || { x: W / 2, y: H / 2 };
+        fx += (anchor.x - a.x) * 0.006;
+        fy += (anchor.y - a.y) * 0.006;
+        a.vx = (a.vx + fx * 0.02) * 0.78;
+        a.vy = (a.vy + fy * 0.02) * 0.78;
+      }
+      edges.forEach(function (e) {
+        var a = byId[e.src], b = byId[e.dst];
+        var dx = b.x - a.x, dy = b.y - a.y;
+        var dist = Math.sqrt(dx * dx + dy * dy) + 0.01;
+        var ideal = e.type === "invokes_cross_project" ? 260 : 110;
+        var stretch = (dist - ideal) * 0.02;
+        var fx = (dx / dist) * stretch, fy = (dy / dist) * stretch;
+        a.vx += fx; a.vy += fy;
+        b.vx -= fx; b.vy -= fy;
+      });
+      for (var i2 = 0; i2 < nodes.length; i2++) {
+        var n = nodes[i2];
+        if (n.pinned) continue;
+        n.x += n.vx; n.y += n.vy;
+        n.x = Math.max(20, Math.min(W - 20, n.x));
+        n.y = Math.max(20, Math.min(H - 20, n.y));
+      }
+    }
+  }
+  simulate(260);
+
+  // ---- rendering ----
+  var svg = document.getElementById("graph");
+  svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+  var NS = "http://www.w3.org/2000/svg";
+  function el(tag, attrs) {
+    var e = document.createElementNS(NS, tag);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    return e;
+  }
+
+  var viewport = el("g", { id: "viewport" });
+  svg.appendChild(viewport);
+  var edgeLayer = el("g", {}); viewport.appendChild(edgeLayer);
+  var nodeLayer = el("g", {}); viewport.appendChild(nodeLayer);
+  var labelLayer = el("g", {}); viewport.appendChild(labelLayer);
+
+  function projColor(p) {
+    return p === "KUL_NIS" ? "var(--proj-nis)" : p === "KUL_VBG" ? "var(--proj-vbg)" : "var(--proj-fwt)";
+  }
+  function classOf(n) {
+    if (n.is_dev) return "dev";
+    return n.classification === "entry-point" ? "entrypoint" : n.classification === "helper" ? "helper" : "utility";
+  }
+
+  var edgeEls = [], nodeEls = [], labelEls = [];
+
+  function draw() {
+    edgeLayer.innerHTML = ""; nodeLayer.innerHTML = ""; labelLayer.innerHTML = "";
+    edgeEls = []; nodeEls = []; labelEls = [];
+
+    var activeProj = currentProjFilter(), activeEdge = currentEdgeFilter();
+    var hideDev = document.getElementById("hide-dev").checked;
+    var hideIsolated = document.getElementById("hide-isolated").checked;
+
+    var visible = {};
+    codeNodes.forEach(function (n) {
+      var ok = activeProj[n.project];
+      if (hideDev && n.is_dev) ok = false;
+      visible[n.id] = ok;
+    });
+
+    edges.forEach(function (e) {
+      if (!activeEdge[e.type]) return;
+      if (!visible[e.src] || !visible[e.dst]) return;
+      var a = byId[e.src], b = byId[e.dst];
+      var line = el("line", {
+        class: "edge-line " + e.type,
+        x1: a.x, y1: a.y, x2: b.x, y2: b.y,
+        "data-src": e.src, "data-dst": e.dst
+      });
+      edgeLayer.appendChild(line);
+      edgeEls.push({ el: line, e: e });
+    });
+
+    if (hideIsolated) {
+      var connected = {};
+      edges.forEach(function (e) {
+        if (!activeEdge[e.type]) return;
+        connected[e.src] = true; connected[e.dst] = true;
+      });
+      codeNodes.forEach(function (n) { if (!connected[n.id]) visible[n.id] = false; });
+    }
+
+    // When a node is focused (selected or hovered), labels are restricted to
+    // that node and its direct neighbors -- otherwise every hub label stays
+    // on screen regardless of what's highlighted, which is exactly the
+    // clutter this was meant to fix. With no focus, fall back to the
+    // "hub files only" / zoomed-in-enough default.
+    var focusId = selectedId || hoveredId;
+    var focusNeighbors = null;
+    if (focusId) {
+      focusNeighbors = {};
+      focusNeighbors[focusId] = true;
+      edges.forEach(function (e) {
+        if (!activeEdge[e.type]) return;
+        if (!visible[e.src] || !visible[e.dst]) return;
+        if (e.src === focusId || e.dst === focusId) { focusNeighbors[e.src] = true; focusNeighbors[e.dst] = true; }
+      });
+    }
+
+    codeNodes.forEach(function (n) {
+      if (!visible[n.id]) return;
+      var r = radius(n);
+      var c = el("circle", {
+        class: "node-circle " + classOf(n) + (n.id === selectedId ? " selected" : ""),
+        cx: n.x, cy: n.y, r: r,
+        "data-id": n.id
+      });
+      c.style.fill = projColor(n.project);
+      var titleEl = el("title", {});
+      titleEl.textContent = n.basename + (n.purpose ? " — " + n.purpose : "");
+      c.appendChild(titleEl);
+      nodeLayer.appendChild(c);
+      nodeEls.push({ el: c, n: n });
+
+      var showLabel;
+      if (focusNeighbors) {
+        showLabel = !!focusNeighbors[n.id];
+      } else {
+        var zoomReveal = view.scale >= 1.6 && (degree[n.id] || 0) >= 2;
+        showLabel = alwaysLabel(n) || zoomReveal;
+      }
+      if (showLabel) {
+        var t = el("text", { class: "node-label", x: n.x + r + 3, y: n.y + 3 });
+        t.textContent = n.basename;
+        labelLayer.appendChild(t);
+        labelEls.push({ el: t, n: n });
+      }
+    });
+
+    applyHighlight();
+  }
+
+  var selectedId = null, hoveredId = null;
+
+  function applyHighlight() {
+    var focusId = selectedId || hoveredId;
+    if (!focusId) {
+      edgeEls.forEach(function (x) { x.el.classList.remove("dim", "highlight"); });
+      nodeEls.forEach(function (x) { x.el.style.opacity = 1; });
+      return;
+    }
+    var neighborSet = {};
+    neighborSet[focusId] = true;
+    edgeEls.forEach(function (x) {
+      var touches = x.e.src === focusId || x.e.dst === focusId;
+      x.el.classList.toggle("highlight", touches);
+      x.el.classList.toggle("dim", !touches);
+      if (touches) { neighborSet[x.e.src] = true; neighborSet[x.e.dst] = true; }
+    });
+    nodeEls.forEach(function (x) { x.el.style.opacity = neighborSet[x.n.id] ? 1 : 0.16; });
+  }
+
+  function currentProjFilter() {
+    var f = {};
+    document.querySelectorAll("[data-proj]").forEach(function (cb) { f[cb.dataset.proj] = cb.checked; });
+    return f;
+  }
+  function currentEdgeFilter() {
+    var f = {};
+    document.querySelectorAll("[data-edge]").forEach(function (cb) { f[cb.dataset.edge] = cb.checked; });
+    return f;
+  }
+
+  document.querySelectorAll("[data-proj],[data-edge]").forEach(function (cb) { cb.addEventListener("change", draw); });
+  document.getElementById("hide-dev").addEventListener("change", draw);
+  document.getElementById("hide-isolated").addEventListener("change", draw);
+
+  document.querySelectorAll("[data-proj]").forEach(function (cb) {
+    document.getElementById("cnt-" + cb.dataset.proj).textContent = codeNodes.filter(function (n) { return n.project === cb.dataset.proj; }).length;
+  });
+
+  // ---- pan / zoom ----
+  var view = { x: 0, y: 0, scale: 1 };
+  function applyView() {
+    viewport.setAttribute("transform", "translate(" + view.x + "," + view.y + ") scale(" + view.scale + ")");
+  }
+  var panning = false, panStart = null;
+  svg.addEventListener("mousedown", function (ev) {
+    if (ev.target.classList && ev.target.classList.contains("node-circle")) return;
+    panning = true; svg.classList.add("dragging");
+    panStart = { x: ev.clientX - view.x, y: ev.clientY - view.y };
+  });
+  window.addEventListener("mousemove", function (ev) {
+    if (panning) { view.x = ev.clientX - panStart.x; view.y = ev.clientY - panStart.y; applyView(); }
+    if (dragNode) {
+      var p = clientToSvg(ev.clientX, ev.clientY);
+      dragNode.x = p.x; dragNode.y = p.y; dragNode.pinned = true;
+      draw();
+    }
+  });
+  window.addEventListener("mouseup", function () { panning = false; svg.classList.remove("dragging"); dragNode = null; });
+  var labelRefreshQueued = false;
+  function queueLabelRefresh() {
+    // Zoom changes which labels should reveal themselves (see zoomReveal in
+    // draw()); a full draw() is cheap at this graph size (123 nodes) but
+    // wheel events fire rapidly, so coalesce into one redraw per frame.
+    if (labelRefreshQueued) return;
+    labelRefreshQueued = true;
+    requestAnimationFrame(function () { labelRefreshQueued = false; draw(); });
+  }
+  svg.addEventListener("wheel", function (ev) {
+    ev.preventDefault();
+    var delta = ev.deltaY < 0 ? 1.08 : 0.93;
+    view.scale = Math.max(0.25, Math.min(4, view.scale * delta));
+    applyView();
+    queueLabelRefresh();
+  }, { passive: false });
+  document.getElementById("zoom-in").addEventListener("click", function () { view.scale = Math.min(4, view.scale * 1.2); applyView(); queueLabelRefresh(); });
+  document.getElementById("zoom-out").addEventListener("click", function () { view.scale = Math.max(0.25, view.scale / 1.2); applyView(); queueLabelRefresh(); });
+  document.getElementById("zoom-reset").addEventListener("click", function () { view = { x: 0, y: 0, scale: 1 }; applyView(); queueLabelRefresh(); });
+  document.getElementById("reheat").addEventListener("click", function () {
+    codeNodes.forEach(function (n) { n.pinned = false; });
+    simulate(200);
+    draw();
+  });
+
+  function clientToSvg(cx, cy) {
+    var rect = svg.getBoundingClientRect();
+    var vb = svg.viewBox.baseVal;
+    var x = (cx - rect.left) / rect.width * vb.width;
+    var y = (cy - rect.top) / rect.height * vb.height;
+    return { x: (x - view.x) / view.scale, y: (y - view.y) / view.scale };
+  }
+
+  var dragNode = null;
+  nodeLayer.addEventListener("mousedown", function (ev) {
+    var t = ev.target;
+    if (!t.classList.contains("node-circle")) return;
+    ev.stopPropagation();
+    dragNode = byId[t.dataset.id];
+  });
+  nodeLayer.addEventListener("mouseover", function (ev) {
+    var t = ev.target;
+    if (!t.classList.contains("node-circle")) return;
+    hoveredId = t.dataset.id;
+    draw();
+  });
+  nodeLayer.addEventListener("mouseout", function (ev) {
+    var t = ev.target;
+    if (!t.classList.contains("node-circle")) return;
+    hoveredId = null;
+    draw();
+  });
+  nodeLayer.addEventListener("click", function (ev) {
+    var t = ev.target;
+    if (!t.classList.contains("node-circle")) return;
+    selectNode(t.dataset.id);
+  });
+
+  // ---- detail panel ----
+  var panel = document.getElementById("detail");
+
+  function badgeColor(proj) { return "background:" + projColor(proj); }
+
+  function selectNode(id) {
+    selectedId = id;
+    draw();
+    renderDetail(byId[id]);
+  }
+
+  function renderDetail(n) {
+    panel.classList.remove("empty");
+    var html = "";
+    html += '<div class="badges-row">';
+    html += '<span class="badge" style="' + badgeColor(n.project) + '">' + n.project + '</span>';
+    html += '<span class="badge outline">' + n.classification + '</span>';
+    if (n.is_dev) html += '<span class="badge outline" style="color:var(--dev-stripe); border-color:var(--dev-stripe)">dev/deprecated</span>';
+    html += '</div>';
+    html += '<div class="detail-name mono">' + n.basename + '</div>';
+    html += '<div class="detail-path mono">' + n.path + '</div>';
+    if (n.purpose) {
+      html += '<div class="purpose-box">' + escapeHtml(n.purpose) + '</div>';
+    }
+    html += '<div style="font-size:11.5px;color:var(--muted)">' + n.loc + ' lines &middot; ' + (n.functions ? n.functions.length : 0) + ' functions &middot; ' + (degree[n.id] || 0) + ' local call edges</div>';
+
+    var stepCount = (n.internal && n.internal.steps ? n.internal.steps.length : 0);
+    if (stepCount > 0) {
+      html += '<button class="view-internal-btn" id="view-internal">&#9881; View internal structure (' + stepCount + ' steps)</button>';
+    }
+
+    if (n.functions && n.functions.length) {
+      html += '<div class="detail-section"><h3>Functions defined</h3><div class="fnlist">' + n.functions.map(escapeHtml).join(", ") + '</div></div>';
+    }
+
+    var out = outgoingAll[n.id] || [];
+    if (out.length) {
+      html += '<div class="detail-section"><h3>Calls out to (' + out.length + ')</h3>';
+      out.forEach(function (e) {
+        var t = byId[e.dst];
+        html += '<div class="link-row" data-goto="' + e.dst + '">' + t.basename + (e.count > 1 ? ' &times;' + e.count : '') + '<span class="line-no">' + e.type + '</span></div>';
+      });
+      html += '</div>';
+    }
+
+    var dyn = dynamicNotes[n.id];
+    if (dyn) {
+      html += '<div class="detail-section"><h3>Dynamic / unresolved dependencies</h3>';
+      dyn.forEach(function (e) {
+        html += '<div class="note-box">&rarr; <span class="mono">' + e.dst + '</span><br>' + escapeHtml(e.note) + '</div>';
+      });
+      html += '</div>';
+    }
+
+    var alts = altWarnings[n.id];
+    if (alts) {
+      html += '<div class="detail-section"><h3>Ambiguous name resolution</h3>';
+      alts.forEach(function (a) {
+        html += '<div class="note-box">Resolved to <span class="mono">' + a.dst + '</span> &mdash; same basename also exists at: ' + a.alts.map(function (x) { return '<span class="mono">' + x + '</span>'; }).join(", ") + '</div>';
+      });
+      html += '</div>';
+    }
+
+    var tools = toolCalls[n.id] || {};
+    var tkKeys = Object.keys(tools);
+    if (tkKeys.length) {
+      html += '<div class="detail-section"><h3>External tools called <span class="badge outline" style="text-transform:none">what &amp; why</span></h3>';
+      tkKeys.sort().forEach(function (tk) {
+        html += '<div class="toolkit-group"><div class="tk-label">' + tk + '</div>';
+        Object.keys(tools[tk]).sort().forEach(function (tool) {
+          var desc = toolDesc[tool];
+          html += '<div class="tool-row"><span class="chip">' + tool + '</span>' +
+            (desc ? '<span class="tool-desc">' + escapeHtml(desc) + '</span>' : '') + '</div>';
+        });
+        html += '</div>';
+      });
+      html += '</div>';
+    }
+
+    var envs = Object.keys(envUses[n.id] || {});
+    if (envs.length) {
+      html += '<div class="detail-section"><h3>Conda / venv envs</h3>' + envs.map(function (e) { return '<span class="chip">' + e + '</span>'; }).join("") + '</div>';
+    }
+    var libs = Object.keys(libImports[n.id] || {});
+    if (libs.length) {
+      html += '<div class="detail-section"><h3>Python libraries imported</h3>' + libs.map(function (e) { return '<span class="chip">' + e + '</span>'; }).join("") + '</div>';
+    }
+
+    var inc = incomingAll[n.id] || [];
+    html += '<div class="detail-section"><h3>Called by (' + inc.length + ')</h3>';
+    if (inc.length) {
+      inc.forEach(function (e) {
+        var s = byId[e.src];
+        html += '<div class="link-row" data-goto="' + e.src + '">' + s.basename + (e.count > 1 ? ' &times;' + e.count : '') + '<span class="line-no">' + e.type + '</span></div>';
+      });
+    } else {
+      html += '<div class="empty-note">Nothing in this scan calls it directly &mdash; likely a standalone/manual tool, or invoked only via a mechanism this extractor can\'t resolve.</div>';
+    }
+    html += '</div>';
+
+    panel.innerHTML = html;
+    panel.querySelectorAll("[data-goto]").forEach(function (row) {
+      row.addEventListener("click", function () { selectNode(row.dataset.goto); centerOn(byId[row.dataset.goto]); });
+    });
+    var viewBtn = document.getElementById("view-internal");
+    if (viewBtn) viewBtn.addEventListener("click", function () { openDrilldown(n.id); });
+  }
+
+  function centerOn(n) {
+    var rect = svg.getBoundingClientRect();
+    var vb = svg.viewBox.baseVal;
+    view.x = (rect.width / 2) - n.x * view.scale;
+    view.y = (rect.height / 2) - n.y * view.scale;
+    // account for viewBox scaling to px
+    view.x = (vb.width / 2 - n.x) * view.scale;
+    view.y = (vb.height / 2 - n.y) * view.scale;
+    applyView();
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  // ---- drill-down: per-file internal structure (functions -> what they call) ----
+  var ddSvg = document.getElementById("drill-svg");
+  var ddOverlay = document.getElementById("drilldown");
+  document.getElementById("dd-back").addEventListener("click", closeDrilldown);
+
+  function closeDrilldown() { ddOverlay.classList.add("hidden"); }
+
+  function targetKind(id) {
+    if (id.indexOf("tool:") === 0) return "tool";
+    if (id.indexOf("pylib:") === 0) return "pylib";
+    if (id.indexOf("env:") === 0) return "env";
+    if (codeIds[id]) return "code";
+    return "data";
+  }
+  function targetLabel(id, kind) {
+    if (kind === "tool") return id.slice(5);
+    if (kind === "pylib") return "import " + id.slice(6);
+    if (kind === "env") return "conda: " + id.slice(4);
+    if (kind === "code") return byId[id] ? byId[id].basename : id;
+    var parts = id.split("/").filter(Boolean);
+    return parts.length ? parts[parts.length - 1] : id;
+  }
+  function targetTooltip(id, kind) {
+    if (kind === "tool") return toolDesc[id.slice(5)] || "";
+    if (kind === "code") return (byId[id] && byId[id].purpose) || "";
+    return "";
+  }
+  function ddCurve(x1, y1, x2, y2, loop) {
+    if (loop) {
+      var bulge = x1 - 70;
+      return "M " + x1 + " " + y1 + " C " + bulge + " " + y1 + ", " + bulge + " " + y2 + ", " + x1 + " " + y2;
+    }
+    var dx = (x2 - x1) * 0.5;
+    return "M " + x1 + " " + y1 + " C " + (x1 + dx) + " " + y1 + ", " + (x2 - dx) + " " + y2 + ", " + x2 + " " + y2;
+  }
+  function ddBoxWidth(label) { return Math.max(76, Math.min(230, 20 + label.length * 6.4)); }
+
+  function openDrilldown(nodeId) {
+    var n = byId[nodeId];
+    var steps = (n.internal && n.internal.steps) || [];
+    document.getElementById("dd-name").textContent = n.basename;
+    document.getElementById("dd-purpose").textContent = n.purpose || "";
+    ddOverlay.classList.remove("hidden");
+    ddSvg.innerHTML = "";
+
+    var fnOrder = (n.internal.functions || []).slice().sort(function (a, b) { return a.start - b.start; }).map(function (f) { return f.name; });
+    var fnOrderIndex = {};
+    fnOrder.forEach(function (name, i) { fnOrderIndex[name] = i; });
+
+    var laneASet = {}, hasScriptBody = false;
+    steps.forEach(function (s) {
+      if (s.function === "(script body)") { hasScriptBody = true; return; }
+      laneASet[s.function] = true;
+      if (s.type === "calls_function") laneASet[s.target] = true;
+    });
+    var laneA = Object.keys(laneASet);
+    laneA.sort(function (a, b) {
+      var ia = fnOrderIndex.hasOwnProperty(a) ? fnOrderIndex[a] : 9999;
+      var ib = fnOrderIndex.hasOwnProperty(b) ? fnOrderIndex[b] : 9999;
+      return ia - ib;
+    });
+    if (hasScriptBody) laneA.push("(script body)");
+
+    var laneB = [], laneBSeen = {};
+    steps.forEach(function (s) {
+      if (s.type === "calls_function") return;
+      if (!laneBSeen[s.target]) { laneBSeen[s.target] = true; laneB.push(s.target); }
+    });
+
+    if (!laneA.length) {
+      var msg = el("text", { x: 40, y: 40, class: "dd-lane-label" });
+      msg.textContent = "No internal calls detected for this file.";
+      ddSvg.appendChild(msg);
+      ddSvg.setAttribute("width", 600); ddSvg.setAttribute("height", 80);
+      ddSvg.setAttribute("viewBox", "0 0 600 80");
+      return;
+    }
+
+    var rowH = 46;
+    var DH = Math.max(220, 70 + Math.max(laneA.length, laneB.length) * rowH);
+    var DW = 980;
+    var laneAX = 170, laneBX = DW - 210;
+    ddSvg.setAttribute("width", DW);
+    ddSvg.setAttribute("height", DH);
+    ddSvg.setAttribute("viewBox", "0 0 " + DW + " " + DH);
+
+    var defs = el("defs", {});
+    var marker = el("marker", { id: "dd-arrow", viewBox: "0 0 10 10", refX: 8, refY: 5, markerWidth: 7, markerHeight: 7, orient: "auto-start-reverse" });
+    var arrowPath = el("path", { d: "M 0 0 L 10 5 L 0 10 z" });
+    arrowPath.style.fill = "var(--edge)";
+    marker.appendChild(arrowPath);
+    defs.appendChild(marker);
+    ddSvg.appendChild(defs);
+
+    var lblA = el("text", { x: laneAX, y: 28, class: "dd-lane-label", "text-anchor": "middle" });
+    lblA.textContent = "functions, in file order";
+    ddSvg.appendChild(lblA);
+    var lblB = el("text", { x: laneBX, y: 28, class: "dd-lane-label", "text-anchor": "middle" });
+    lblB.textContent = "calls out to";
+    ddSvg.appendChild(lblB);
+
+    var posA = {}, posB = {};
+    var gapA = (DH - 70) / laneA.length;
+    laneA.forEach(function (name, i) { posA[name] = { x: laneAX, y: 55 + i * gapA + gapA / 2, w: ddBoxWidth(name) }; });
+    var gapB = laneB.length ? (DH - 70) / laneB.length : 0;
+    laneB.forEach(function (id, i) { var lbl = targetLabel(id, targetKind(id)); posB[id] = { x: laneBX, y: 55 + i * gapB + gapB / 2, w: ddBoxWidth(lbl), kind: targetKind(id), label: lbl }; });
+
+    var edgeLayer = el("g", {}); ddSvg.appendChild(edgeLayer);
+    var nodeLayer = el("g", {}); ddSvg.appendChild(nodeLayer);
+    var edgeEls = [];
+
+    steps.forEach(function (s) {
+      var from = posA[s.function] || posA["(script body)"];
+      if (!from) return;
+      var isLoop = s.type === "calls_function";
+      var to = isLoop ? posA[s.target] : posB[s.target];
+      if (!to) return;
+      var x1 = from.x + from.w / 2, y1 = from.y;
+      var x2 = isLoop ? to.x + to.w / 2 : to.x - to.w / 2, y2 = to.y;
+      var path = el("path", {
+        class: "dd-edge" + (isLoop ? " fn2fn" : ""), d: ddCurve(x1, y1, x2, y2, isLoop),
+        "marker-end": "url(#dd-arrow)"
+      });
+      if (s.note) { var t = el("title", {}); t.textContent = s.note; path.appendChild(t); }
+      edgeLayer.appendChild(path);
+      edgeEls.push({ el: path, from: s.function, to: (isLoop ? s.target : s.target) });
+    });
+
+    function drawBox(cls, x, y, w, label, tooltip) {
+      var g = el("g", { class: cls, transform: "translate(" + (x - w / 2) + "," + (y - 13) + ")" });
+      var rect = el("rect", { width: w, height: 26, rx: 7 });
+      var text = el("text", { x: w / 2, y: 17, "text-anchor": "middle" });
+      text.textContent = label.length > 30 ? label.slice(0, 28) + "…" : label;
+      g.appendChild(rect); g.appendChild(text);
+      if (tooltip) { var t = el("title", {}); t.textContent = tooltip; g.appendChild(t); }
+      return g;
+    }
+
+    var ddSelected = null;
+    function ddHighlight(name) {
+      ddSelected = name;
+      edgeEls.forEach(function (x) {
+        var touches = x.from === name || x.to === name;
+        x.el.classList.toggle("highlight", !!name && touches);
+        x.el.classList.toggle("dim", !!name && !touches);
+      });
+    }
+
+    laneA.forEach(function (name) {
+      var p = posA[name];
+      var box = drawBox("dd-node-fn", p.x, p.y, p.w, name, null);
+      box.addEventListener("click", function () { ddHighlight(ddSelected === name ? null : name); });
+      nodeLayer.appendChild(box);
+    });
+    laneB.forEach(function (id) {
+      var p = posB[id];
+      var box = drawBox("dd-node-target kind-" + p.kind, p.x, p.y, p.w, p.label, targetTooltip(id, p.kind));
+      if (p.kind === "code") {
+        box.addEventListener("click", function () { closeDrilldown(); selectNode(id); centerOn(byId[id]); });
+      } else {
+        box.addEventListener("click", function () { ddHighlight(ddSelected === id ? null : id); });
+      }
+      nodeLayer.appendChild(box);
+    });
+  }
+
+  // ---- search ----
+  var searchBox = document.getElementById("search");
+  var resultsBox = document.getElementById("search-results");
+  var searchable = codeNodes.map(function (n) {
+    var fns = (n.functions || []).join(" ");
+    return { n: n, hay: (n.basename + " " + n.path + " " + fns).toLowerCase() };
+  });
+  searchBox.addEventListener("input", function () {
+    var q = searchBox.value.trim().toLowerCase();
+    resultsBox.innerHTML = "";
+    if (!q) return;
+    var matches = searchable.filter(function (s) { return s.hay.indexOf(q) !== -1; }).slice(0, 30);
+    matches.forEach(function (m) {
+      var row = document.createElement("div");
+      row.className = "search-result";
+      row.innerHTML = '<span class="basename">' + m.n.basename + '</span> <span style="color:var(--muted)">(' + m.n.project + ')</span>';
+      row.addEventListener("click", function () { selectNode(m.n.id); centerOn(m.n); });
+      resultsBox.appendChild(row);
+    });
+    if (!matches.length) resultsBox.innerHTML = '<div class="empty-note" style="padding:4px 8px">No matches</div>';
+  });
+
+  // ---- stats ----
+  var statsEl = document.getElementById("stats");
+  var installCount = ALL_NODES.filter(function (n) { return n.type === "install_section"; }).length;
+  var toolCount = ALL_NODES.filter(function (n) { return n.type === "external_tool"; }).length;
+  [
+    ["Code files", codeNodes.length],
+    ["Call edges", edges.length],
+    ["External tools", toolCount],
+    ["Install sections", installCount]
+  ].forEach(function (s) {
+    var d = document.createElement("div");
+    d.className = "stat";
+    d.innerHTML = '<span class="n mono">' + s[1] + '</span><span class="l">' + s[0] + '</span>';
+    statsEl.appendChild(d);
+  });
+
+  draw();
+  applyView();
+})();
+</script>

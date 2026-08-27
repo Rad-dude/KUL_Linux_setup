@@ -9,3 +9,4 @@
 /.installed_versions/
 /.condarc
 /failed_run_log.txt
+__pycache__/
