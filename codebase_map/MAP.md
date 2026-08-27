@@ -140,7 +140,16 @@ description from `tools/curated_metadata.py` (`NODE_PURPOSE`,
 `TOOL_INFO`, keyed by node id / tool name) — these are hand-written, not
 regenerated, so add an entry there when adding a script or calling a new
 tool for the first time; the extractor logs which nodes/tools are missing
-one so nothing has to be tracked by hand.
+one so nothing has to be tracked by hand (`extract_graph.py --strict`
+exits non-zero if any are missing, which is exactly what CI checks).
+
+`.github/workflows/codebase-map-qc.yml` runs on every push/PR touching
+`setup_environment.sh` or `codebase_map/**`: it clones KUL_NIS/KUL_VBG/
+KUL_FWT at the exact branches this installer pins, regenerates the map,
+and fails if either (a) something is missing a curated_metadata.py entry,
+or (b) the regenerated `graph.json`/`explorer.html` don't match what's
+committed — i.e. it catches "the map is stale" automatically instead of
+relying on someone remembering to re-run the two commands above.
 
 Then republish `explorer.html` as the same Artifact (same file path) if you
 want the hosted copy updated too. The Mermaid diagrams and the narrative

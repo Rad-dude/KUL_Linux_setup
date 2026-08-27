@@ -77,6 +77,29 @@ sourcing targets.
    handled via the 5 manually-curated `MANUAL_DYNAMIC_EDGES` in the
    extractor, not left silently missing.
 
+## Determinism fix (added when wiring up CI)
+
+The extractor originally iterated a Python `set` (`local_names`) and relied
+on `os.walk`'s traversal order for both node discovery and basename-index
+population — neither is guaranteed stable across processes (string-hash
+randomization) or filesystems/OSes. Two runs over byte-identical source
+could therefore reorder `graph.json`'s `edges` array, or occasionally flip
+which of two *overlapping* local-name matches at the same text position won
+(rare, but real when one name is a prefix of another). Fixed: `os.walk`
+traversal is now sorted (`dirnames.sort()`, `sorted(filenames)`), the
+whole-word scan iterates `sorted(local_names)`, and `graph_nodes`/`edges`/
+`unresolved` all get a final deterministic sort before serialization.
+Verified by running the extractor twice back-to-back and diffing the output
+byte-for-byte (identical). This is also what makes a CI "is the committed
+map stale" diff check meaningful instead of noisy — see
+`.github/workflows/codebase-map-qc.yml`.
+
+One side effect: the alphabetical tie-break changed which target wins a
+small number (~9 of ~3260) of same-position overlapping-name matches,
+versus whatever the hash-randomized order happened to produce before. This
+is a reproducibility fix, not a regression — the previous behavior was
+already nondeterministic, just not yet observed varying.
+
 ## Net assessment
 
 High-confidence for: sourcing edges, Python import edges, cross-project

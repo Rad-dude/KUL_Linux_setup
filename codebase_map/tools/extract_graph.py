@@ -36,6 +36,7 @@ Method (see codebase_map/PLAN.md section 3 for the rationale):
 Output: codebase_map/data/graph.json -- nodes + typed edges, source of truth
 for the diagrams and the interactive explorer. Also prints a short summary.
 """
+import argparse
 import json
 import os
 import re
@@ -45,7 +46,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from curated_metadata import NODE_PURPOSE, TOOL_INFO
 
-ROOT = Path("/mnt/DATA1/aradwa0/KUL_software")
+# codebase_map/tools/extract_graph.py -> KUL_software/ is two levels up.
+# Not hardcoded to one machine's checkout path -- this runs the same from
+# a CI clone as from a local one.
+ROOT = Path(__file__).resolve().parent.parent.parent
 PROJECT_DIRS = {
     "KUL_NIS": ROOT / "src/KUL_NIS",
     "KUL_VBG": ROOT / "src/KUL_VBG",
@@ -219,9 +223,15 @@ def discover_nodes():
     basename_index = {}
     for project, base in PROJECT_DIRS.items():
         for dirpath, dirnames, filenames in os.walk(base):
+            # os.scandir (which os.walk uses) doesn't guarantee traversal
+            # order -- sort so two runs over identical source produce
+            # byte-identical output regardless of OS/filesystem, which is
+            # what makes a CI "is the committed map stale" diff meaningful
+            # rather than noisy.
+            dirnames.sort()
             if ".git" in dirpath.split(os.sep):
                 continue
-            for fn in filenames:
+            for fn in sorted(filenames):
                 ext = Path(fn).suffix
                 if ext not in CODE_EXTS:
                     continue
@@ -402,7 +412,7 @@ def extract_edges(nodes, basename_index):
         #    the cleaned text (catches task_in="...", cmd=, direct calls,
         #    variable-assignment indirection -- see module docstring).
         seen_positions = set()
-        for name in local_names:
+        for name in sorted(local_names):
             if name == node.basename:
                 continue
             if len(name) < 6:
@@ -558,6 +568,15 @@ def main():
         edges.append(dict(src=e["src"], dst=e["dst"], type=e["type"],
                            resolved=False, source="manual", note=e["note"]))
 
+    # Final deterministic ordering -- so two runs over identical source
+    # produce byte-identical graph.json regardless of set/dict iteration
+    # order or filesystem traversal order. This is what makes "diff the
+    # regenerated file against the committed one" a meaningful staleness
+    # check (in CI or by hand) instead of noise.
+    graph_nodes.sort(key=lambda n: n["id"])
+    edges.sort(key=lambda e: (e["src"], e["dst"], e["type"], e.get("line", 0)))
+    unresolved.sort(key=lambda u: (u["src"], u["raw"], u["line"]))
+
     graph = dict(
         meta=dict(
             generated_by="codebase_map/tools/extract_graph.py",
@@ -572,13 +591,13 @@ def main():
     )
 
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    OUT_PATH.write_text(json.dumps(graph, indent=1))
+    OUT_PATH.write_text(json.dumps(graph, indent=1) + "\n")
     print(f"nodes={len(graph_nodes)} edges={len(edges)} unresolved={len(unresolved)}")
     print(f"tools={len(tool_ids)} envs={len(env_ids)} pylibs={len(pylib_ids)}")
     print(f"wrote {OUT_PATH}")
 
-    missing_purpose = [n.id for n in nodes.values() if n.id not in NODE_PURPOSE]
-    missing_tool_desc = [t.split(":", 1)[1] for t in tool_ids if t.split(":", 1)[1] not in TOOL_INFO]
+    missing_purpose = sorted(n.id for n in nodes.values() if n.id not in NODE_PURPOSE)
+    missing_tool_desc = sorted(t.split(":", 1)[1] for t in tool_ids if t.split(":", 1)[1] not in TOOL_INFO)
     if missing_purpose:
         print(f"\n{len(missing_purpose)} code node(s) missing a NODE_PURPOSE entry in curated_metadata.py:")
         for m in missing_purpose:
@@ -588,6 +607,15 @@ def main():
         for m in missing_tool_desc:
             print(f"  {m}")
 
+    if args.strict and (missing_purpose or missing_tool_desc):
+        print("\n--strict: failing because of the missing metadata above.")
+        sys.exit(1)
+
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--strict", action="store_true",
+                         help="exit non-zero if any code file or external tool is missing a "
+                              "curated_metadata.py entry (used by CI; not needed for local iteration)")
+    args = parser.parse_args()
     main()

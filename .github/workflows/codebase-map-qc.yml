@@ -1,0 +1,77 @@
+name: Codebase map QC
+
+# Keeps codebase_map/ (see codebase_map/PLAN.md and MAP.md) from silently
+# going stale. Two independent checks, both against a fresh clone of
+# KUL_NIS/KUL_VBG/KUL_FWT at the exact branches this installer pins (parsed
+# out of setup_environment.sh itself, not duplicated here, so a branch bump
+# there can't silently desync this workflow):
+#
+#   1. --strict fails if any code file or external tool the extractor finds
+#      has no entry in tools/curated_metadata.py -- i.e. someone added a
+#      script or started shelling out to a new tool without documenting it.
+#   2. Regenerating data/graph.json and explorer.html and diffing them
+#      against the committed versions fails if they're out of sync with the
+#      current source -- i.e. someone changed something the map depends on
+#      (a call, an entry point, a pinned branch) without re-running the
+#      extractor and committing the result.
+#
+# Requires the extractor's output to be deterministic across runs (sorted
+# node/edge lists, sorted filesystem traversal) -- otherwise check 2 would
+# fail on ordering noise unrelated to real drift. See extract_graph.py's
+# "Final deterministic ordering" comment if that check starts flaking.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "setup_environment.sh"
+      - "codebase_map/**"
+      - ".github/workflows/codebase-map-qc.yml"
+  pull_request:
+    paths:
+      - "setup_environment.sh"
+      - "codebase_map/**"
+      - ".github/workflows/codebase-map-qc.yml"
+  workflow_dispatch: {}
+
+jobs:
+  regenerate-and-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out KUL_Linux_setup
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Clone KUL_NIS / KUL_VBG / KUL_FWT at their pinned branches
+        run: |
+          set -euo pipefail
+          get_repo() { awk -v dir="$1" '$1=="clone_at" && $3==dir {print $2}' setup_environment.sh; }
+          get_branch() { grep -m1 "^$1=" setup_environment.sh | cut -d'"' -f2; }
+
+          nis_url=$(get_repo KUL_NIS);  nis_branch=$(get_branch KUL_NIS_BRANCH)
+          vbg_url=$(get_repo KUL_VBG);  vbg_branch=$(get_branch KUL_VBG_BRANCH)
+          fwt_url=$(get_repo KUL_FWT);  fwt_branch=$(get_branch KUL_FWT_BRANCH)
+          echo "KUL_NIS: $nis_url @ $nis_branch"
+          echo "KUL_VBG: $vbg_url @ $vbg_branch"
+          echo "KUL_FWT: $fwt_url @ $fwt_branch"
+
+          mkdir -p src
+          git clone --depth 1 --branch "$nis_branch" "$nis_url" src/KUL_NIS
+          git clone --depth 1 --branch "$vbg_branch" "$vbg_url" src/KUL_VBG
+          git clone --depth 1 --branch "$fwt_branch" "$fwt_url" src/KUL_FWT
+
+      - name: Regenerate codebase_map (fails on undocumented files/tools)
+        run: |
+          python3 codebase_map/tools/extract_graph.py --strict
+          python3 codebase_map/tools/build_explorer.py
+
+      - name: Fail if the committed map is stale
+        run: |
+          if ! git diff --exit-code -- codebase_map/data/graph.json codebase_map/explorer.html; then
+            echo "::error::codebase_map is out of date with the current source. Run 'python3 codebase_map/tools/extract_graph.py && python3 codebase_map/tools/build_explorer.py' locally and commit data/graph.json + explorer.html."
+            exit 1
+          fi
