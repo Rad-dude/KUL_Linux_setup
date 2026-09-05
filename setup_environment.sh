@@ -3310,25 +3310,140 @@ run 'sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restar
     fi
 
     echo
+    echo
+    echo "  -- pinned source checkouts --"
+    # Blind spot this closes (found in a live audit): every check above asks
+    # "does this tool run?", never "is it the revision this script pins?". A
+    # box can report 42 OK / 0 FAIL while sitting on a checkout that predates
+    # the pin. scilpy did exactly that here -- stock scilus/scilpy where the
+    # KUL fork is pinned -- and the commits it was missing are the ones
+    # KUL_FWT's -R ensemble (scil_bundle_filter_by_occurrence) and its QQ
+    # screenshots (scil_viz_bundle_screenshot_mni --local_coloring) call, so
+    # the failure only ever showed up mid-run, deep into a tractography job.
+    #
+    # Deliberately NO dirty-tree check in this block: the installer patches
+    # HD-BET_v1 and HD-GLIO-AUTO working trees itself (_hdglio_patch_sources)
+    # and rewrites FastSurfer's run_fastsurfer.sh, so "modified" is the
+    # correct state for those and flagging it would be pure noise. The
+    # dirty-tree check belongs on the sibling repos below, where local edits
+    # mean unpushed work rather than an applied patch.
+    _norm_git_url() {
+        # git@host:owner/repo.git and https://host/owner/repo -> host/owner/repo
+        printf '%s' "$1" | sed -e 's#^[a-z+]*://##' -e 's#^[^@/]*@##' -e 's#:#/#' \
+                               -e 's#\.git$##' -e 's#/$##' | tr 'A-Z' 'a-z'
+    }
+    _any_remote_matches() {
+        # ANY remote, not specifically origin: a fork is just as often wired up
+        # as a second remote (this box has mrtrix3 as origin=upstream,
+        # myfork=the KUL fork), and demanding it be origin would fail a
+        # perfectly correct checkout.
+        local dir="$1" want u
+        want=$(_norm_git_url "$2")
+        for u in $(git -C "$dir" remote 2>/dev/null); do
+            if [ "$(_norm_git_url "$(git -C "$dir" config --get "remote.$u.url" 2>/dev/null)")" = "$want" ]; then
+                return 0
+            fi
+        done
+        return 1
+    }
+    _verify_pin() {
+        local name="$1" pinned="$2" want_repo="${3:-}" section="${4:-}"
+        local dir="$SOFTWARE_ROOT/src/$name"
+        local head
+        if [ -z "$pinned" ]; then return 0; fi
+        if [ ! -d "$dir/.git" ]; then
+            vwarn "pin: $name" "no git checkout at $dir -- cannot verify against pinned ${pinned:0:8}"
+            return 0
+        fi
+        head=$(git -C "$dir" rev-parse HEAD 2>/dev/null || echo "")
+        if ! _git_short_matches "$head" "$pinned"; then
+            vfail "pin: $name" "checkout is ${head:0:8}, pinned ${pinned:0:8}${section:+ -- run '--only $section'}"
+            return 0
+        fi
+        # Right commit. For a fork-pinned repo, also confirm the fork is still
+        # a configured remote. The commit is what matters today, but a checkout
+        # with no remote pointing at the fork quietly tracks the wrong upstream
+        # the next time anyone runs git pull in it.
+        if [ -n "$want_repo" ] && ! _any_remote_matches "$dir" "$want_repo"; then
+            vwarn "pin: $name" "@ ${head:0:8} matches, but no remote points at $want_repo -- a later 'git pull' here would track the wrong upstream"
+            return 0
+        fi
+        if [ -n "$want_repo" ]; then
+            vok "pin: $name" "@ ${head:0:8} (fork remote present)"
+        else
+            vok "pin: $name" "@ ${head:0:8}"
+        fi
+    }
+    _verify_pin mrtrix3      "$MRTRIX3_COMMIT"    "$MRTRIX3_REPO" mrtrix3
+    _verify_pin scilpy       "$SCILPY_COMMIT"     "$SCILPY_REPO"  env-scilpy
+    _verify_pin ANTs         "$ANTS_COMMIT"       ""              ants
+    _verify_pin HD-BET       "$HDBET_COMMIT"      ""              env-hdbet
+    _verify_pin HD-BET_v1    "$HDBET_V1_COMMIT"   ""              env-hdglio
+    _verify_pin HD-GLIO-AUTO "$HDGLIOAUTO_COMMIT" ""              env-hdglio
+    if [ "${USE_KARAWUN_DEV:-1}" = "1" ]; then
+        _verify_pin karawun  "$KARAWUN_COMMIT"    "$KARAWUN_REPO" env-karawun
+    else
+        vok "pin: karawun" "--karawun-stock mode: conda-forge $KARAWUN_STOCK_VERSION, no git checkout expected"
+    fi
+
     echo "  -- sibling repos --"
     _verify_repo() {
         local name="$1" expect_branch="$2"
         local dir="$SOFTWARE_ROOT/src/$name"
+        local actual_branch notes dirty up behind age
         if [ ! -d "$dir/.git" ]; then
             vfail "repo: $name" "not cloned"
-            return
+            return 0
         fi
-        local actual_branch
-        actual_branch=$(git -C "$dir" branch --show-current 2>/dev/null)
-        if [ "$actual_branch" = "$expect_branch" ]; then
-            vok "repo: $name" "@ $actual_branch"
+        actual_branch=$(git -C "$dir" branch --show-current 2>/dev/null || echo "")
+        if [ "$actual_branch" != "$expect_branch" ]; then
+            vwarn "repo: $name" "on '$actual_branch', expected '$expect_branch' (detached HEAD is normal for a pinned-commit checkout -- verify the commit by hand)"
+            return 0
+        fi
+
+        # Being on the right branch was the entire check until an audit found a
+        # box where all three repos reported OK while one of them carried four
+        # uncommitted files -- among them the only copy of a Dockerfile fix
+        # without which the VBG container does not build at all -- and all
+        # three were behind origin. Neither state is an error worth failing on,
+        # but neither should be invisible either, so both are reported.
+        notes=""
+        dirty=$(git -C "$dir" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+        if [ "${dirty:-0}" -gt 0 ]; then
+            notes="${dirty} uncommitted file(s) -- that work exists only on this disk"
+        fi
+
+        # Offline on purpose: this reads the remote-tracking ref already on
+        # disk and never touches the network, so verify stays usable on a box
+        # with no credentials or no route to GitHub. The flip side is that the
+        # ref is only as fresh as the last fetch, so the age of that fetch is
+        # reported next to the count rather than passed off as live truth.
+        up=$(git -C "$dir" rev-parse --abbrev-ref '@{u}' 2>/dev/null || echo "")
+        if [ -n "$up" ]; then
+            behind=$(git -C "$dir" rev-list --count "HEAD..$up" 2>/dev/null || echo 0)
+            if [ "${behind:-0}" -gt 0 ]; then
+                age="last fetch: unknown"
+                if [ -f "$dir/.git/FETCH_HEAD" ]; then
+                    age="fetched $(( ( $(date +%s) - $(stat -c %Y "$dir/.git/FETCH_HEAD") ) / 86400 ))d ago"
+                fi
+                notes="${notes:+$notes; }${behind} behind ${up} (${age}) -- 'git -C $dir pull --ff-only'"
+            fi
+        fi
+
+        if [ -n "$notes" ]; then
+            vwarn "repo: $name" "@ $actual_branch, $notes"
         else
-            vwarn "repo: $name" "on '$actual_branch', expected '$expect_branch' (detached HEAD is normal for a pinned-commit checkout — verify the commit by hand)"
+            vok "repo: $name" "@ $actual_branch"
         fi
     }
     _verify_repo KUL_NIS "$KUL_NIS_BRANCH"
     _verify_repo KUL_VBG "$KUL_VBG_BRANCH"
     _verify_repo KUL_FWT "$KUL_FWT_BRANCH"
+    # The installer repo checks itself too: it was 3 commits behind during the
+    # audit, which is how the stale scilpy pin stayed invisible.
+    if [ -d "$SOFTWARE_ROOT/src/KUL_Linux_setup/.git" ]; then
+        _verify_repo KUL_Linux_setup main
+    fi
     if [ -d "$SOFTWARE_ROOT/src/LoRE-SD/.git" ]; then
         vok "repo: LoRE-SD" "cloned @ $(git -C "$SOFTWARE_ROOT/src/LoRE-SD" branch --show-current 2>/dev/null) (see 'conda: lore_sd' above for the actual install check)"
     else
