@@ -316,6 +316,83 @@ run()   { if [ "$DRY_RUN" -eq 1 ]; then echo "    [dry-run] $*"; else eval "$@";
 
 have()  { command -v "$1" >/dev/null 2>&1; }
 
+# ── Pinned checkout helper ───────────────────────────────────────────────────
+# Every pinned source section used to do this pair:
+#     [ -d "$dest" ] || run "git clone ... '$dest'"
+#     run "cd '$dest' && git checkout $PIN"
+# which skips the clone whenever the directory merely EXISTS, and then checks
+# out a commit that the existing checkout may simply not contain. Two ways that
+# bites, one confirmed live and one latent:
+#   * The pin moves to a DIFFERENT repo. scilpy's pin moved to the KUL fork
+#     while boxes already had a stock scilus/scilpy clone sitting at $dest, so
+#     the clone was skipped and the checkout died with
+#     "fatal: reference is not a tree: 77246ca2". The same shape is latent for
+#     karawun and mrtrix3, which are also fork-pinned.
+#   * The pin moves FORWARD and the existing clone predates it and has never
+#     been re-fetched. That one applies to the plain-upstream pins too
+#     (HD-BET, HD-BET_v1, HD-GLIO-AUTO).
+# In the conda sections the failure lands AFTER `pip uninstall <pkg>`, so it
+# leaves an env holding every dependency and no package -- strictly worse than
+# before the run started, and not obviously repairable from the error text.
+# Fetch what is missing instead of assuming it is already there.
+_norm_git_url() {
+    # git@host:owner/repo.git and https://host/owner/repo -> host/owner/repo
+    printf '%s' "$1" | sed -e 's#^[a-z+]*://##' -e 's#^[^@/]*@##' -e 's#:#/#' \
+                           -e 's#\.git$##' -e 's#/$##' | tr 'A-Z' 'a-z'
+}
+# Name of an existing remote already pointing at $2, empty if there is none.
+_remote_for_url() {
+    local dir="$1" want u
+    want=$(_norm_git_url "$2")
+    for u in $(git -C "$dir" remote 2>/dev/null); do
+        if [ "$(_norm_git_url "$(git -C "$dir" config --get "remote.$u.url" 2>/dev/null)")" = "$want" ]; then
+            printf '%s' "$u"; return 0
+        fi
+    done
+    return 0
+}
+_ensure_pinned_checkout() {
+    local dest="$1" repo="$2" branch="$3" commit="$4"
+    local rname
+    if [ ! -d "$dest/.git" ]; then
+        if [ -n "$branch" ]; then
+            run "git clone -b '$branch' '$repo' '$dest'"
+        else
+            run "git clone '$repo' '$dest'"
+        fi
+        run "cd '$dest' && git checkout '$commit'"
+        return 0
+    fi
+    if [ "$DRY_RUN" -eq 1 ]; then
+        echo "    [dry-run] would ensure $dest contains ${commit:0:8} (fetching from $repo if absent), then check it out"
+        return 0
+    fi
+    if ! git -C "$dest" cat-file -e "${commit}^{commit}" 2>/dev/null; then
+        # Reuse a remote that already points at the pinned repo if there is one
+        # -- these checkouts are often wired up by hand (mrtrix3 here is
+        # origin=upstream, myfork=the KUL fork). Only add one when nothing
+        # matches, and never rewrite 'origin': a later plain `git pull` in that
+        # directory should keep meaning what the user set it to mean.
+        rname=$(_remote_for_url "$dest" "$repo")
+        if [ -z "$rname" ]; then
+            rname="kulpin"
+            if git -C "$dest" remote get-url "$rname" >/dev/null 2>&1; then
+                run "git -C '$dest' remote set-url '$rname' '$repo'"
+            else
+                run "git -C '$dest' remote add '$rname' '$repo'"
+            fi
+        fi
+        log "Pinned commit ${commit:0:8} not present in $dest -- fetching from $repo"
+        if [ -n "$branch" ]; then
+            run "git -C '$dest' fetch '$rname' '$branch'"
+        else
+            run "git -C '$dest' fetch '$rname'"
+        fi
+    fi
+    run "cd '$dest' && git checkout '$commit'"
+}
+
+
 # Stricter than 'have nvidia-smi': the binary can be present but non-functional
 # (confirmed in practice: "Failed to initialize NVML: Driver/library version
 # mismatch", the classic symptom of a driver package upgrade whose kernel
@@ -1312,8 +1389,7 @@ section_env_scilpy() {
     run "$(mamba_bin) create -n scilpy python=3.12 -y"
     run "'$(env_bin scilpy pip)' install scilpy==2.3.0"
     run "'$(env_bin scilpy pip)' uninstall scilpy -y"
-    [ -d "$dest" ] || run "git clone -b '$SCILPY_BRANCH' '$SCILPY_REPO' '$dest'"
-    run "cd '$dest' && git checkout $SCILPY_COMMIT"
+    _ensure_pinned_checkout "$dest" "$SCILPY_REPO" "$SCILPY_BRANCH" "$SCILPY_COMMIT"
     run "cd '$dest' && '$(env_bin scilpy pip)' install -e . --no-deps"
     # Pillow, stated explicitly. KUL_FWT_bundle_report.py imports PIL, but nothing
     # in this env declares it directly -- it arrives only transitively via
@@ -1345,8 +1421,7 @@ section_env_hdbet() {
     fi
     log "Creating 'hd-bet-env' (python 3.10, torch 2.6, HD-BET $HDBET_COMMIT)"
     run "$(mamba_bin) create -n hd-bet-env python=3.10 -y"
-    [ -d "$dest" ] || run "git clone https://github.com/MIC-DKFZ/HD-BET.git '$dest'"
-    run "cd '$dest' && git checkout $HDBET_COMMIT"
+    _ensure_pinned_checkout "$dest" "https://github.com/MIC-DKFZ/HD-BET.git" "" "$HDBET_COMMIT"
     # Install HD-BET and torch together in one resolver pass, with the CUDA (or
     # CPU) wheel index as primary and PyPI as extra. Doing this as two separate
     # pip calls (torch first, then 'pip install -e .' for HD-BET/nnunetv2) is a
@@ -1547,10 +1622,8 @@ section_env_hdglio() {
     local hdbet_dir="$SOFTWARE_ROOT/src/HD-BET_v1"
     local auto_dir="$SOFTWARE_ROOT/src/HD-GLIO-AUTO"
 
-    [ -d "$auto_dir" ]  || run "git clone https://github.com/NeuroAI-HD/HD-GLIO-AUTO.git '$auto_dir'"
-    run "cd '$auto_dir' && git checkout $HDGLIOAUTO_COMMIT"
-    [ -d "$hdbet_dir" ] || run "git clone https://github.com/MIC-DKFZ/HD-BET.git '$hdbet_dir'"
-    run "cd '$hdbet_dir' && git checkout $HDBET_V1_COMMIT"
+    _ensure_pinned_checkout "$auto_dir" "https://github.com/NeuroAI-HD/HD-GLIO-AUTO.git" "" "$HDGLIOAUTO_COMMIT"
+    _ensure_pinned_checkout "$hdbet_dir" "https://github.com/MIC-DKFZ/HD-BET.git" "" "$HDBET_V1_COMMIT"
 
     local need_create=1
     if env_exists hdglio; then
@@ -1696,8 +1769,7 @@ section_env_karawun() {
         log "Creating 'KarawunDev' (editable install, karawun $KARAWUN_COMMIT + dcm2bids 3.1.1)"
         run "$(mamba_bin) create -n KarawunDev python=3.14 -y"
         run "'$(env_bin KarawunDev pip)' install dcm2bids>=3.1"
-        [ -d "$dest" ] || run "git clone -b '$KARAWUN_BRANCH' '$KARAWUN_REPO' '$dest'"
-        run "cd '$dest' && git checkout $KARAWUN_COMMIT"
+        _ensure_pinned_checkout "$dest" "$KARAWUN_REPO" "$KARAWUN_BRANCH" "$KARAWUN_COMMIT"
         run "cd '$dest' && '$(env_bin KarawunDev pip)' install -e ."
         ok "KarawunDev ready"
     else
@@ -1923,8 +1995,7 @@ section_mrtrix3() {
     # layout compatible with the rest of this script (PATH/PYTHONPATH below
     # are unchanged from the old classic-build layout: cmake --install
     # still populates $dest/bin and $dest/lib/mrtrix3 the same way).
-    [ -d "$dest" ] || run "git clone -b '$MRTRIX3_BRANCH' '$MRTRIX3_REPO' '$dest'"
-    run "cd '$dest' && git checkout '$MRTRIX3_COMMIT'"
+    _ensure_pinned_checkout "$dest" "$MRTRIX3_REPO" "$MRTRIX3_BRANCH" "$MRTRIX3_COMMIT"
 
     # -DCMAKE_IGNORE_PREFIX_PATH excludes miniforge3 from find_package() searches
     # entirely: without it, cmake can silently pick up a *conda* Qt (e.g. from
@@ -3327,11 +3398,6 @@ run 'sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restar
     # correct state for those and flagging it would be pure noise. The
     # dirty-tree check belongs on the sibling repos below, where local edits
     # mean unpushed work rather than an applied patch.
-    _norm_git_url() {
-        # git@host:owner/repo.git and https://host/owner/repo -> host/owner/repo
-        printf '%s' "$1" | sed -e 's#^[a-z+]*://##' -e 's#^[^@/]*@##' -e 's#:#/#' \
-                               -e 's#\.git$##' -e 's#/$##' | tr 'A-Z' 'a-z'
-    }
     _any_remote_matches() {
         # ANY remote, not specifically origin: a fork is just as often wired up
         # as a second remote (this box has mrtrix3 as origin=upstream,
