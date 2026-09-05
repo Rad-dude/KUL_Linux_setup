@@ -161,7 +161,24 @@ FSL_VERSION="6.0.7.23"                    # Latest as of July 2026 (was 6.0.6.5)
                                            # kul_dwifslpreproc now passes --nthr explicitly on the
                                            # CPU eddy path (see its own comments), independent of
                                            # this version pin.
-SCILPY_COMMIT="b2bf4ac95ab3dfbb622dfdb586988123ef88475e"   # 176 commits past tag 2.2.2
+SCILPY_REPO="https://github.com/Rad-dude/scilpy.git"       # KUL fork of scilus/scilpy
+SCILPY_BRANCH="kul-fixes"
+SCILPY_COMMIT="77246ca256e6b55927a8d9512f7e605ec0eb5bd5"   # b2bf4ac9 (176 past tag 2.2.2) + 3 fixes
+                                                          # Three upstream bugs, branched off the
+                                                          # commit previously pinned here:
+                                                          #   - scil_bundle_filter_by_occurrence: crash
+                                                          #     when --ratio_voxels is omitted, and its
+                                                          #     streamlines output was never written
+                                                          #   - scil_tractogram_filter_by_anatomy: CSF
+                                                          #     rejection used 'any' (whole-path) rather
+                                                          #     than 'either_end', discarding most valid
+                                                          #     streamlines for grazing sulcal CSF
+                                                          #   - scil_viz_bundle_screenshot_mni:
+                                                          #     --local_coloring rendered one flat colour
+                                                          #     whenever streamlines shared a point count
+                                                          # All three are general (not KUL-specific), so
+                                                          # if upstream merges them this can go back to a
+                                                          # plain scilus/scilpy commit pin.
 HDBET_COMMIT="678e44d546a84de0f2a7fc245f176b82b7d912fd"    # 4 commits past tag v2.0.1
 KARAWUN_REPO="https://github.com/Rad-dude/karawun.git"
 KARAWUN_BRANCH="kul-extended-palette"
@@ -1290,12 +1307,12 @@ section_env_scilpy() {
             return
         fi
     fi
-    log "Creating 'scilpy' env (python 3.12, scilpy $SCILPY_COMMIT — pinned per \
-KUL_NIS/README.md: v2.3.0)"
+    log "Creating 'scilpy' env (python 3.12, KUL fork $SCILPY_BRANCH @ $SCILPY_COMMIT \
+— v2.3.0 base plus three upstream bugfixes)"
     run "$(mamba_bin) create -n scilpy python=3.12 -y"
     run "'$(env_bin scilpy pip)' install scilpy==2.3.0"
     run "'$(env_bin scilpy pip)' uninstall scilpy -y"
-    [ -d "$dest" ] || run "git clone https://github.com/scilus/scilpy.git '$dest'"
+    [ -d "$dest" ] || run "git clone -b '$SCILPY_BRANCH' '$SCILPY_REPO' '$dest'"
     run "cd '$dest' && git checkout $SCILPY_COMMIT"
     run "cd '$dest' && '$(env_bin scilpy pip)' install -e . --no-deps"
     # Pillow, stated explicitly. KUL_FWT_bundle_report.py imports PIL, but nothing

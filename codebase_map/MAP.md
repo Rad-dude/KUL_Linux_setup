@@ -82,12 +82,14 @@ they're the kind of thing that costs an afternoon to rediscover otherwise.
   lausanne-atlas LUT scripts (`remap_lausanne_to_msbp.py`,
   `generate_msbp_luts.py`, `make_readable_lut.py`) are byte-identical
   duplicates shipped in *both* KUL_VBG and KUL_NIS.
-- **Two small bugs found during inventory** (not fixed, just documented):
+- **Two small bugs found during inventory.** Still open:
   `KUL_FWT_make_VOIs_4Temp.sh` self-locates via `which KUL_FWT_make_VOIs.sh`
-  — the *non*-`_4Temp` name, apparently copy-paste. `KUL_FWT_make_TCKs_4Temp.sh`
-  silently skips the HTML bundle-report step that `KUL_FWT_make_TCKs.sh`
-  runs — template-data runs get no contact-sheet report, and nothing flags
-  this.
+  — the *non*-`_4Temp` name, apparently copy-paste. (Its `make_TCKs_4Temp.sh`
+  sibling does *not* have this bug; it uses its own name.) Fixed 2026-09-03:
+  `KUL_FWT_make_TCKs_4Temp.sh` silently skipped the HTML bundle-report step
+  that `KUL_FWT_make_TCKs.sh` runs, so template-data runs got no contact-sheet
+  report; it now calls `KUL_FWT_bundle_report.py` under `-S`, guarded by
+  `command -v` exactly as the subject-space script does.
 - **Genuinely dynamic dependencies** (can't be resolved by reading source,
   only by running it): `KUL_FWT_make_VOIs*.sh` pick a per-bundle recipe file
   from `track_recipes/` by name at runtime (from the `-c` config file);

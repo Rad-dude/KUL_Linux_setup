@@ -131,6 +131,7 @@ NODE_PURPOSE = {
     "KUL_FWT/KUL_FWT_make_TCKs_4Temp.sh": "Template/group-data counterpart of KUL_FWT_make_TCKs.sh.",
     "KUL_FWT/KUL_FWT_tractometry_functions.sh": "Shared library (sourced only under -Q) computing per-bundle along-tract metric profiles.",
     "KUL_FWT/KUL_FWT_FBC_4TCKs.py": "Filters a tractogram using DIPY's Fiber-to-Bundle Coherence measure.",
+    "KUL_FWT/KUL_FWT_reject_outliers.py": "Rejects outlier streamlines from one bundle (the filt3 step), bounding the cut by an absolute score floor and by a share of the bundle; replaces scil_bundle_reject_outliers.",
     "KUL_FWT/KUL_FWT_plot_bundle_connectivity.py": "Builds a per-bundle endpoint-connectivity matrix and plot.",
     "KUL_FWT/KUL_FWT_SCs_TCKs.py": "AFQ-style along-tract profile analysis for filtered bundles.",
     "KUL_FWT/KUL_FWT_bundle_spider_plot.py": "Aggregates every bundle's tractometry output into one subject-level radar/spider chart.",
