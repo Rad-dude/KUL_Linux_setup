@@ -121,9 +121,9 @@ likely give you a *different and possibly incompatible* version.
 
 | Repo | Remote | Branch | Commit | Notes |
 |---|---|---|---|---|
-| KUL_NIS | `treanus/KUL_NIS.git` | `KUL_NIS_v2.0_20260701` | `ba4009d6` | Not `main` — this dev branch |
-| KUL_VBG | `KUL-Radneuron/KUL_VBG.git` | `KUL_VBG_2.0` | `b25ac249` | v2.0 rewrite branch |
-| KUL_FWT | `KUL-Radneuron/KUL_FWT.git` | `KUL_FWT_v2.0` | `c4accb8c` | v2.0 rewrite branch |
+| KUL_NIS | `treanus/KUL_NIS.git` | `KUL_NIS_v2.0_20260701` | `f92cc02f` | Not `main` — this dev branch |
+| KUL_VBG | `KUL-Radneuron/KUL_VBG.git` | `KUL_VBG_2.0` | `44aafd1f` | v2.0 rewrite branch |
+| KUL_FWT | `KUL-Radneuron/KUL_FWT.git` | `KUL_FWT_v2.0` | `7c422a89` | v2.0 rewrite branch |
 | LoRE-SD | `SiebeLeysen/LoRE-SD.git` | `mrtrix_module` | tracks branch tip (was `4d259c7e` at last check, now past that — not commit-pinned like the rows below) | **Not `main`**. Despite the branch name, it's installed as a regular editable pip package (`setup.py` + pybind11/nlopt/cmake in its own `lore_sd` conda env), not an MRtrix3 external-module build — see `MIGRATION_GUIDE.md`'s `lore_sd` entry |
 | scilpy | `scilus/scilpy.git` | (detached, dev) | `b2bf4ac9` | 176 commits past tag `2.2.2` — pip installed editable |
 | HD-BET | `MIC-DKFZ/HD-BET` | `master` | `678e44d5` | 4 commits past tag `v2.0.1` (docs only, harmless) |
