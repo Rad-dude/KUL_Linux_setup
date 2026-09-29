@@ -1925,18 +1925,84 @@ the NIfTI/PNG -> DICOM step behind KUL_clinical_fmridti.sh -R)"
 # ── 5. Sibling repos, pinned branches ──────────────────────────────────────────
 
 section_repos() {
-    log "Cloning KUL_NIS / KUL_VBG / KUL_FWT at their pinned branches"
+    log "Cloning/updating KUL_NIS / KUL_VBG / KUL_FWT at their pinned branches"
     local src="$SOFTWARE_ROOT/src"
 
+    # An existing directory used to end the story here ("already cloned"), so
+    # the script could never correct branch drift on a box it had already set
+    # up: a sibling repo four commits behind origin stayed four commits behind
+    # across every re-run. Worse, that state was invisible from the other end
+    # too -- _verify_repo's behind-count reads the remote-tracking ref offline
+    # on purpose, so a ref that had not been fetched since before the drift
+    # reported 0 behind and the repo passed as OK. Confirmed live on KUL_VBG:
+    # a full verify run said nothing while it sat 4 commits back.
+    #
+    # These three are pinned to BRANCHES, not commits, so the branch tip IS the
+    # pin and advancing to it is the point -- unlike _ensure_pinned_checkout
+    # above, which pins an exact commit and must never move on its own.
+    #
+    # Never anything but a fast-forward, and never over local work: uncommitted
+    # edits, a diverged branch, or a checkout sitting on some other branch are
+    # all reported and then left strictly alone. On this pipeline that local
+    # work is routinely the only copy of something that matters (the audit that
+    # prompted the verify check found a VBG Dockerfile fix that existed nowhere
+    # else), so losing it costs far more than a stale checkout does.
     clone_at() {
         local url="$1" dir="$2" branch="$3"
-        if [ -d "$src/$dir" ]; then
-            ok "$dir already cloned at $src/$dir"
-        else
-            run "git clone '$url' '$src/$dir'"
-            run "cd '$src/$dir' && git checkout '$branch'"
+        local dest="$src/$dir" cur dirty behind ahead rname
+        if [ ! -d "$dest/.git" ]; then
+            run "git clone -b '$branch' '$url' '$dest'"
             ok "$dir @ $branch"
+            return 0
         fi
+
+        if [ "$DRY_RUN" -eq 1 ]; then
+            echo "    [dry-run] would fetch '$branch' from $url and fast-forward $dest to it, if $dir is clean and not diverged"
+            return 0
+        fi
+
+        cur=$(git -C "$dest" branch --show-current 2>/dev/null || echo "")
+        if [ "$cur" != "$branch" ]; then
+            warn "$dir is on '${cur:-detached HEAD}', not the pinned '$branch' -- left alone. \
+If that is not deliberate: git -C $dest checkout $branch"
+            return 0
+        fi
+
+        # Same reasoning as _ensure_pinned_checkout: reuse whatever remote
+        # already points at this URL rather than assuming 'origin' is it, and
+        # never rewrite a remote the user set up by hand.
+        rname=$(_remote_for_url "$dest" "$url")
+        [ -n "$rname" ] || rname=origin
+        run "git -C '$dest' fetch '$rname' '$branch'"
+
+        behind=$(git -C "$dest" rev-list --count HEAD..FETCH_HEAD 2>/dev/null || echo 0)
+        ahead=$(git -C "$dest" rev-list --count FETCH_HEAD..HEAD 2>/dev/null || echo 0)
+
+        if [ "${behind:-0}" -eq 0 ]; then
+            if [ "${ahead:-0}" -gt 0 ]; then
+                ok "$dir @ $branch, $ahead commit(s) ahead of $rname/$branch (unpushed local work)"
+            else
+                ok "$dir already at the $branch tip"
+            fi
+            return 0
+        fi
+
+        if [ "${ahead:-0}" -gt 0 ]; then
+            warn "$dir has DIVERGED from $rname/$branch ($ahead local / $behind remote commit(s)) \
+-- not touching it. Reconcile by hand, then re-run this section."
+            return 0
+        fi
+
+        dirty=$(git -C "$dest" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+        if [ "${dirty:-0}" -gt 0 ]; then
+            warn "$dir is $behind commit(s) behind $rname/$branch but has $dirty uncommitted \
+file(s) -- NOT fast-forwarding, since that work may be its only copy. Commit or stash it, then: \
+git -C $dest pull --ff-only"
+            return 0
+        fi
+
+        run "git -C '$dest' merge --ff-only FETCH_HEAD"
+        ok "$dir fast-forwarded $behind commit(s) to the $branch tip"
     }
 
     clone_at https://github.com/treanus/KUL_NIS.git       KUL_NIS    "$KUL_NIS_BRANCH"
@@ -3456,7 +3522,7 @@ run 'sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restar
     _verify_repo() {
         local name="$1" expect_branch="$2"
         local dir="$SOFTWARE_ROOT/src/$name"
-        local actual_branch notes dirty up behind age
+        local actual_branch notes dirty up behind age fetch_age
         if [ ! -d "$dir/.git" ]; then
             vfail "repo: $name" "not cloned"
             return 0
@@ -3493,6 +3559,21 @@ run 'sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restar
                     age="fetched $(( ( $(date +%s) - $(stat -c %Y "$dir/.git/FETCH_HEAD") ) / 86400 ))d ago"
                 fi
                 notes="${notes:+$notes; }${behind} behind ${up} (${age}) -- 'git -C $dir pull --ff-only'"
+            else
+                # "0 behind" against a ref nobody has fetched lately is not
+                # evidence of being up to date, and reporting a bare OK for it
+                # is exactly how a 4-commit drift on KUL_VBG passed a full
+                # verify run in silence: the tracking ref still pointed at HEAD
+                # because the last fetch predated the commits. Distinguish
+                # "level with the remote" from "level with a stale ref".
+                if [ ! -f "$dir/.git/FETCH_HEAD" ]; then
+                    notes="${notes:+$notes; }level with ${up}, but this clone has never fetched -- 'git -C $dir fetch' before trusting that"
+                else
+                    fetch_age=$(( ( $(date +%s) - $(stat -c %Y "$dir/.git/FETCH_HEAD") ) / 86400 ))
+                    if [ "$fetch_age" -ge 7 ]; then
+                        notes="${notes:+$notes; }level with ${up}, but last fetch was ${fetch_age}d ago -- 'git -C $dir fetch' to confirm"
+                    fi
+                fi
             fi
         fi
 
