@@ -28,23 +28,42 @@ is for this account or shared, and where it should live.
 ./setup_environment.sh --skip docker,fsl                 # run everything except these
 ./setup_environment.sh --karawun-stock                   # conda-forge karawun instead of the KUL fork
 ./setup_environment.sh --dry-run                         # print what would run, do nothing
+./setup_environment.sh --mode user --allow-system        # user mode, but also run the system-wide steps
 ```
 
 `--help` prints the full option list. The script is idempotent where practical:
 completed sections check for their own output and are cheap to skip, so it is
 safe to re-run after fixing a failure partway through.
 
-It does modify the system — apt packages, Docker, CUDA/NVIDIA driver bits, and a
-managed environment block, written to `~/.bashrc` in user mode or to
+In shared mode, or in user mode with `--allow-system`, it modifies the system:
+apt packages, Docker, CUDA/NVIDIA driver bits, a system-wide FreeSurfer. Plain
+user mode changes nothing outside `$SOFTWARE_ROOT` and your own `~/.bashrc`.
+It only checks those system-wide sections, lists any other sudo step instead of
+running it, and prints what an admin would need to run at the end.
+
+**Next to an existing setup.** On a server where another KUL install (often a
+shared one other people use) is already in your PATH, your conda configuration
+or `/etc`, a user-mode run lists what it finds and keeps it out of its own
+environment. It also creates every conda env by full path under `$SOFTWARE_ROOT`.
+Nothing of the existing install is modified, including its block in `/etc`. In
+your shell, this install's block runs after the existing setup and takes over:
+it deactivates the other conda, and its envs are looked up first by name. To
+switch the current shell back to the earlier setup, run `kul_old`; a new
+terminal starts on this install again.
+
+The bashrc section writes a
+managed environment block, to `~/.bashrc` in user mode or to
 `/etc/profile.d/kul_nis_env.sh` in shared mode (with a one-line source shim in
 `/etc/bash.bashrc`, since `/etc/profile.d` is only read by login shells and
 desktop terminals spawn non-login ones). The `bashrc` section owns that block:
 it works out which mode the machine is already in from what is on disk, refreshes
 a stale block in place, and removes copies left behind in the other mode's
-locations, keeping backups as `<file>.kulbak.<timestamp>`. Exactly one live copy
-of the body is the invariant — a second one makes every shell source FreeSurfer
+locations, keeping backups as `<file>.kulbak.<timestamp>`. A user-mode run never
+removes one from `/etc`. Exactly one live copy
+of this install's block is the invariant — a second one makes every shell source FreeSurfer
 and FSL twice and leaves PATH full of duplicates — and `--only verify` fails if
-it finds more. Everything under `$SOFTWARE_ROOT` is self-contained and easy to delete,
+it finds more. Blocks written by another install, for a different root, are reported
+but don't count. Everything under `$SOFTWARE_ROOT` is self-contained and easy to delete,
 with one exception: FreeSurfer is a real system install, because upstream ships
 only `.deb`/`.rpm` with no relocatable option since 8.0. `$SOFTWARE_ROOT/src/freesurfer`
 is a symlink to wherever apt put it.

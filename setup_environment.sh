@@ -39,6 +39,11 @@
 #   ./setup_environment.sh --skip docker,fsl     # run everything except these
 #   ./setup_environment.sh --karawun-stock # conda-forge karawun instead of the KUL fork (see below)
 #   ./setup_environment.sh --dry-run       # print what would run, do nothing
+#   ./setup_environment.sh --allow-system  # user mode: also run the system-wide steps (apt,
+#                                           # docker, nvidia, ..., anything through sudo), which
+#                                           # change the machine for every account. Without it,
+#                                           # user mode only checks them and lists, at the end,
+#                                           # what an admin would need to run.
 #   ./setup_environment.sh --force-rebuild-mismatched  # non-interactive: auto-build the pinned
 #                                           # version instead of keeping one that doesn't match
 #                                           # (see "Version-pin drift" below)
@@ -115,6 +120,7 @@ GROUP_NAME="${GROUP_NAME:-kulusers}"
 ASSUME_YES=0
 FORCE_REBUILD_MISMATCHED=0
 FRESH_BASHRC=0
+ALLOW_SYSTEM=0
 ROOT_OVERRIDE=""
 CACHE_ROOT_OVERRIDE=""
 NCPU="${NCPU:-$(nproc)}"
@@ -580,6 +586,21 @@ KUL_BLOCK_ALL_DESTS=("${KUL_BLOCK_USER_DESTS[@]}" "${KUL_BLOCK_SHARED_DESTS[@]}"
 kul_block_present_in() { grep -qF "$KUL_BLOCK_MARKER" "$1" 2>/dev/null; }
 
 # Every file that currently carries the block, one per line.
+# The SOFTWARE_ROOT a managed block was written for. The /etc/bash.bashrc shim
+# has none of its own; it belongs to the body in /etc/profile.d.
+kul_block_root() {
+    local f="$1" r
+    r=$(awk -v s="$KUL_BLOCK_MARKER" -v e="$KUL_BLOCK_MARKER_END" '
+        $0 == s { b = 1; next }
+        $0 == e { b = 0 }
+        b && /^export SOFTWARE_ROOT=/ { sub(/^export SOFTWARE_ROOT=/, ""); gsub(/"/, ""); print; exit }
+    ' "$f" 2>/dev/null)
+    if [ -z "$r" ] && [ "$f" != "${KUL_BLOCK_SHARED_DESTS[0]}" ] && kul_in_list "$f" "${KUL_BLOCK_SHARED_DESTS[@]}"; then
+        r=$(kul_block_root "${KUL_BLOCK_SHARED_DESTS[0]}")
+    fi
+    printf '%s' "$r"
+}
+
 kul_block_locations() {
     local f
     for f in "${KUL_BLOCK_ALL_DESTS[@]}"; do
@@ -663,6 +684,7 @@ while [ $# -gt 0 ]; do
         --dry-run)   DRY_RUN=1; shift ;;
         --force-rebuild-mismatched) FORCE_REBUILD_MISMATCHED=1; shift ;;
         --fresh-bashrc) FRESH_BASHRC=1; shift ;;
+        --allow-system) ALLOW_SYSTEM=1; shift ;;
         --karawun-dev) USE_KARAWUN_DEV=1; shift ;;   # now the default; kept so existing invocations still work
         --karawun-stock) USE_KARAWUN_DEV=0; shift ;; # opt back out to the conda-forge package
         --with-hdglioauto) INCLUDE_HDGLIOAUTO=1; shift ;;
@@ -694,6 +716,16 @@ if [ "$MODE_EXPLICIT" -eq 0 ]; then
     _found_shared=0
     for _f in "${KUL_BLOCK_USER_DESTS[@]}";   do kul_block_present_in "$_f" && _found_user=1; done
     for _f in "${KUL_BLOCK_SHARED_DESTS[@]}"; do kul_block_present_in "$_f" && _found_shared=1; done
+    # A shared install someone else runs, on a server this account merely
+    # uses, is not this account's mode: its block in /etc does not make this a
+    # shared install. Only a shared root this account owns does.
+    _shared_root=""
+    [ "$_found_shared" -eq 1 ] && _shared_root="$(kul_block_root "${KUL_BLOCK_SHARED_DESTS[0]}")"
+    if [ "$_found_shared" -eq 1 ] && [ -n "$_shared_root" ] && [ ! -O "$_shared_root" ]; then
+        _found_shared=0
+        warn "A shared install that this account does not own is set up here ($_shared_root). \
+Installing for this account only (user mode); the shared install is left as is."
+    fi
     if [ "$_found_shared" -eq 1 ] && [ "$_found_user" -eq 1 ]; then
         KUL_DETECTED_MODE="shared"
         warn "Managed environment block found in BOTH user and shared locations:"
@@ -816,6 +848,139 @@ fi
 # running this script from a fresh, non-activated shell.
 export MAMBA_ROOT_PREFIX="$SOFTWARE_ROOT/miniforge3"
 
+# ── Isolation from an existing setup on this account ──────────────────────────
+# A server can already carry an older KUL setup that other people rely on: a
+# shared install on PATH, another miniforge's conda init in ~/.bashrc, a
+# ~/.condarc whose envs_dirs puts ~/.conda/envs first. Confirmed live on such a
+# server: `mamba create -n hd-bet-env` landed in ~/.conda/envs because of that
+# envs_dirs, and the name-based env check in use then found an old
+# ~/.conda/envs/scilpy and skipped installing ours. Everything below changes
+# THIS PROCESS only: the installer stops seeing the old setup, nothing of it is
+# modified on disk, and what was found is listed before anything runs.
+KUL_PREFLIGHT=()
+
+# A directory belongs to another install if it sits inside a conda prefix
+# outside $SOFTWARE_ROOT, or holds one of the tools this script installs.
+# System directories are always kept; a tool found there is left to
+# version_gate, which asks rather than replaces.
+kul_foreign_dir() {
+    local d="$1" t
+    case "$d" in
+        "$SOFTWARE_ROOT"|"$SOFTWARE_ROOT"/*) return 1 ;;
+        /usr/local/sbin|/usr/local/bin|/usr/sbin|/usr/bin|/sbin|/bin) return 1 ;;
+        /usr/games|/usr/local/games|/snap/bin|/usr/local/cuda*) return 1 ;;
+    esac
+    [ -d "$d/../conda-meta" ] && return 0
+    for t in conda mamba mrconvert antsRegistration fslmaths recon-all KUL_dwiprep.sh KUL_VBG.sh; do
+        [ -e "$d/$t" ] && return 0
+    done
+    return 1
+}
+
+# Sets KUL_KEPT to the colon-separated list $2 minus its foreign entries; $1
+# names the list in the report.
+kul_drop_foreign() {
+    local label="$1" e IFS=:
+    KUL_KEPT=""
+    for e in $2; do
+        [ -z "$e" ] && continue
+        if kul_foreign_dir "$e"; then
+            KUL_PREFLIGHT+=("$label: left out $e")
+        else
+            KUL_KEPT="${KUL_KEPT:+$KUL_KEPT:}$e"
+        fi
+    done
+}
+
+kul_isolate_env() {
+    local v f
+    if [ -n "${CONDA_EXE:-}" ] && [ "$CONDA_EXE" != "$SOFTWARE_ROOT/miniforge3/bin/conda" ]; then
+        KUL_PREFLIGHT+=("conda from another install is initialised in this shell: $CONDA_EXE")
+    fi
+    if [ -n "${CONDA_PREFIX:-}" ] && ! _is_under "$CONDA_PREFIX" "$SOFTWARE_ROOT"; then
+        KUL_PREFLIGHT+=("an env from another conda install is active: $CONDA_PREFIX")
+    fi
+    for v in CONDA_ENVS_PATH CONDA_ENVS_DIRS CONDARC PYTHONPATH PYTHONHOME VIRTUAL_ENV FSLDIR FREESURFER_HOME ANTSPATH; do
+        # This install's own values (a re-run from a shell it set up) are not news.
+        case "${!v:-}" in ""|"$SOFTWARE_ROOT"|"$SOFTWARE_ROOT"/*) continue ;; esac
+        KUL_PREFLIGHT+=("$v was set: ${!v}")
+    done
+    for f in "$HOME/.condarc" "$HOME/.conda/condarc" "$HOME/.config/conda/condarc"; do
+        [ -f "$f" ] || continue
+        if grep -q '^[[:space:]]*envs_dirs:' "$f"; then
+            KUL_PREFLIGHT+=("$f sets envs_dirs (overridden for this run so envs go in $SOFTWARE_ROOT/miniforge3/envs)")
+        fi
+        if grep -qE '^[[:space:]]*-[[:space:]]*defaults[[:space:]]*$' "$f"; then
+            KUL_PREFLIGHT+=("$f adds the 'defaults' channel (conda-forge is put first, strict, for this run)")
+        fi
+    done
+    for v in scilpy hd-bet-env hdglio resseg KarawunDev KarawunEnv pyfMRI rsfmri_env KUL_dicom lore_sd; do
+        if [ -d "$HOME/.conda/envs/$v" ]; then
+            KUL_PREFLIGHT+=("$HOME/.conda/envs/$v exists (not used; this install's own goes in $SOFTWARE_ROOT/miniforge3/envs)")
+        fi
+    done
+    if [ -f "$HOME/.bashrc" ]; then
+        while IFS= read -r f; do
+            [ "$f" = "$SOFTWARE_ROOT/miniforge3/bin/conda" ] && continue
+            KUL_PREFLIGHT+=("$HOME/.bashrc initialises another conda: $f")
+        done < <(grep -o "'[^']*/bin/conda'" "$HOME/.bashrc" 2>/dev/null | tr -d "'" | sort -u)
+    fi
+    if [ "$INSTALL_MODE" = "user" ]; then
+        for f in "${KUL_BLOCK_SHARED_DESTS[@]}"; do
+            if kul_block_present_in "$f"; then
+                KUL_PREFLIGHT+=("$f has a shared install's KUL block (other accounts use it; left as is, your ~/.bashrc block takes precedence for you)")
+            fi
+        done
+    fi
+
+    for v in $(compgen -e); do
+        case "$v" in
+            CONDA_*|_CE_M|_CE_CONDA|MAMBA_EXE|VIRTUAL_ENV|PYTHONPATH|PYTHONHOME|PYTHONUSERBASE) unset "$v" ;;
+            FSLDIR|FSL_DIR|FSLOUTPUTTYPE|FREESURFER_HOME|FREESURFER|SUBJECTS_DIR|FS_LICENSE) unset "$v" ;;
+            FASTSURFER_HOME|ANTSPATH|KUL_*) unset "$v" ;;
+        esac
+    done
+    unset -f conda mamba 2>/dev/null || true
+    kul_drop_foreign PATH "$PATH"
+    PATH="$KUL_KEPT"
+    if [ -n "${LD_LIBRARY_PATH:-}" ]; then
+        kul_drop_foreign LD_LIBRARY_PATH "$LD_LIBRARY_PATH"
+        if [ -n "$KUL_KEPT" ]; then export LD_LIBRARY_PATH="$KUL_KEPT"; else unset LD_LIBRARY_PATH; fi
+    fi
+    # Packages in ~/.local would otherwise satisfy pip inside our envs.
+    export PYTHONNOUSERSITE=1
+    # Environment variables beat every condarc file, including ~/.condarc.
+    export CONDA_ENVS_DIRS="$SOFTWARE_ROOT/miniforge3/envs"
+    export CONDA_PKGS_DIRS="$CACHE_ROOT/conda_pkgs"
+    export CONDA_CHANNELS="conda-forge"
+    export CONDA_CHANNEL_PRIORITY="strict"
+}
+kul_isolate_env
+
+# ── System-wide changes ────────────────────────────────────────────────────────
+# User mode installs into your own $SOFTWARE_ROOT, possibly on a machine other
+# people use. Package installs, Docker/NVIDIA setup and anything else that goes
+# through sudo change that machine for every account, so in user mode the
+# system-wide sections are only checked, every other sudo call is listed
+# instead of run, and the list is printed at the end for an admin.
+# --allow-system, or shared mode, runs them as before.
+KUL_SYSTEM_SECTIONS="apt docker nvidia apptainer vscode r rstudio awscli"
+KUL_SYSTEM_TODO=()
+if [ "$INSTALL_MODE" = "shared" ] || [ "$ALLOW_SYSTEM" -eq 1 ]; then
+    KUL_SYSTEM_CHANGES=apply
+else
+    KUL_SYSTEM_CHANGES=check
+fi
+sudo() {
+    if [ "$KUL_SYSTEM_CHANGES" = "apply" ]; then
+        command sudo "$@"
+        return
+    fi
+    KUL_SYSTEM_TODO+=("sudo $*")
+    # stderr, so the notice still shows when sudo sits in a pipeline
+    echo "    [user mode: not run, needs an admin] sudo $*" >&2
+}
+
 # Self-apply, for the DURATION OF THIS RUNNING PROCESS ONLY, the same PATH
 # additions section_bashrc will eventually persist to ~/.bashrc. Without this,
 # every "have <tool>" check for something THIS SCRIPT ITSELF just installed
@@ -844,6 +1009,10 @@ echo "    Cache root:      $CACHE_ROOT$([ "$CACHE_ROOT" = "$SOFTWARE_ROOT/cache"
 [ "$INSTALL_MODE" = "shared" ] && echo "    Shared group:    $GROUP_NAME (created if missing)"
 echo "    CPUs for builds: $NCPU"
 [ "$DRY_RUN" -eq 1 ] && warn "DRY RUN — no commands will actually be executed"
+if [ "${#KUL_PREFLIGHT[@]}" -gt 0 ]; then
+    warn "Found an existing setup on this account. It is kept out of this run; nothing of it is changed:"
+    for _kul_f in "${KUL_PREFLIGHT[@]}"; do echo "      - $_kul_f"; done
+fi
 
 _needs_sudo=0
 section_enabled apt && _needs_sudo=1
@@ -861,6 +1030,11 @@ section_enabled afni && _needs_sudo=1
 [ "$INSTALL_MODE" = "shared" ] && [ ! -d "$SOFTWARE_ROOT" ] && _needs_sudo=1
 if [ "$INSTALL_MODE" = "shared" ] && ! _is_under "$CACHE_ROOT" "$SOFTWARE_ROOT" && [ ! -d "$CACHE_ROOT" ]; then
     _needs_sudo=1
+fi
+if [ "$KUL_SYSTEM_CHANGES" = "check" ]; then
+    _needs_sudo=0
+    warn "User mode: the system-wide sections ($KUL_SYSTEM_SECTIONS) are only checked, and any \
+other step that needs sudo is listed instead of run. Pass --allow-system to run them."
 fi
 if [ "$_needs_sudo" -eq 1 ] && [ "$DRY_RUN" -eq 0 ]; then
     warn "This run will prompt for your sudo password (apt/docker install\
@@ -942,6 +1116,20 @@ fi
 
 # ── 1. System packages ────────────────────────────────────────────────────────
 
+apt_core_pkgs() {
+    echo "build-essential cmake ninja-build pkg-config git curl wget ca-certificates gnupg unzip \
+        software-properties-common \
+        gcc-12 g++-12 \
+        python3 python3-dev python3-pip python3-venv \
+        libeigen3-dev zlib1g-dev libfftw3-dev libtiff5-dev libpng-dev \
+        libqt5opengl5-dev libqt5svg5-dev libgl1-mesa-dev libgl1-mesa-dri \
+        xvfb \
+        p7zip-full \
+        dcmtk \
+        imagemagick tcsh \
+        rsync tmux htop glances nvtop iotop lm-sensors ncdu ripgrep fd-find shellcheck jq parallel git-lfs"
+}
+
 section_apt() {
     log "Installing system packages (apt)"
     run "sudo apt-get update"
@@ -957,17 +1145,8 @@ section_apt() {
     # philosophy section_mrtrix3 already uses for its own Qt5/Qt6 choice via
     # Qt6Config.cmake, just one layer earlier (apt metadata instead of a
     # post-install CMake config file).
-    local core_pkgs="build-essential cmake ninja-build pkg-config git curl wget ca-certificates gnupg unzip \
-        software-properties-common \
-        gcc-12 g++-12 \
-        python3 python3-dev python3-pip python3-venv \
-        libeigen3-dev zlib1g-dev libfftw3-dev libtiff5-dev libpng-dev \
-        libqt5opengl5-dev libqt5svg5-dev libgl1-mesa-dev libgl1-mesa-dri \
-        xvfb \
-        p7zip-full \
-        dcmtk \
-        imagemagick tcsh \
-        rsync tmux htop glances nvtop iotop lm-sensors ncdu ripgrep fd-find shellcheck jq parallel git-lfs"
+    local core_pkgs
+    core_pkgs="$(apt_core_pkgs)"
     local pkg avail_pkgs="" missing_pkgs=""
     for pkg in $core_pkgs; do
         if apt-cache show "$pkg" >/dev/null 2>&1; then
@@ -2349,9 +2528,32 @@ if the -V flag below is rejected, check 'python3 $installer --help' for the curr
 # install -- so it lands under $SOFTWARE_ROOT like everything else here, no
 # root/dpkg-database registration needed.
 
+# FreeSurfer's .deb installs system-wide, which user mode does not do. Reuse
+# an 8.2.0 that an admin already installed, if there is one.
+kul_link_system_freesurfer() {
+    local pkg home=""
+    for pkg in $(dpkg-query -W -f='${Package}\n' 'freesurfer*' 2>/dev/null); do
+        home="$(dpkg -L "$pkg" 2>/dev/null | grep -m1 'SetUpFreeSurfer\.sh$')" || true
+        home="${home%/SetUpFreeSurfer.sh}"
+        [ -n "$home" ] && grep -qs '8\.2\.0' "$home/build-stamp.txt" && break
+        home=""
+    done
+    if [ -n "$home" ] && [ ! -e "$SOFTWARE_ROOT/src/freesurfer" ]; then
+        run "ln -sfn '$home' '$SOFTWARE_ROOT/src/freesurfer'"
+        ok "Using the system FreeSurfer 8.2.0 at $home (symlinked from $SOFTWARE_ROOT/src/freesurfer)"
+    elif [ -n "$home" ]; then
+        warn "A system FreeSurfer 8.2.0 is at $home, but $SOFTWARE_ROOT/src/freesurfer already exists -- left as is"
+    else
+        warn "No system-wide FreeSurfer 8.2.0 here, and its .deb can only be installed with sudo -- skipped in user mode"
+        KUL_SYSTEM_TODO+=("$0 --only freesurfer --allow-system   # installs FreeSurfer 8.2.0 system-wide")
+    fi
+}
+
 section_freesurfer() {
     if [ -f "$SOFTWARE_ROOT/src/freesurfer/SetUpFreeSurfer.sh" ]; then
         ok "FreeSurfer already present at $SOFTWARE_ROOT/src/freesurfer"
+    elif [ "$KUL_SYSTEM_CHANGES" = "check" ]; then
+        kul_link_system_freesurfer
     else
         local rel debfile url tmpdir pkgname real_home
         rel="$(ubuntu_release)"
@@ -2424,8 +2626,13 @@ itself will all refuse to run without one."
         warn "No license.txt found -- this part genuinely can't be automated (personal registration required)."
         read -r -p "  Path to an existing license.txt on this machine (blank to skip and add it later): " _fs_lic_path
         if [ -n "$_fs_lic_path" ] && [ -f "$_fs_lic_path" ]; then
-            sudo cp "$_fs_lic_path" "$fs_license"
-            ok "license.txt copied from $_fs_lic_path"
+            if [ "$KUL_SYSTEM_CHANGES" = "check" ] && [ -n "$(kul_write_cmd "$fs_license")" ]; then
+                warn "$fs_license is inside the system FreeSurfer install -- not copied in user mode"
+                KUL_SYSTEM_TODO+=("sudo cp '$_fs_lic_path' '$fs_license'")
+            else
+                $(kul_write_cmd "$fs_license") cp "$_fs_lic_path" "$fs_license"
+                ok "license.txt copied from $_fs_lic_path"
+            fi
         elif [ -n "$_fs_lic_path" ]; then
             fail "No file found at '$_fs_lic_path' -- skipping. Register at \
 https://surfer.nmr.mgh.harvard.edu/registration.html, then place it at $fs_license yourself."
@@ -2448,6 +2655,9 @@ place the file they email you at $fs_license."
         : # nothing installed to patch (install itself must have failed above)
     elif [ "$DRY_RUN" -eq 1 ]; then
         echo "    [dry-run] would check for and apply official FreeSurfer 8.2.0 patches (fs820_updates.sh)"
+    elif [ "$KUL_SYSTEM_CHANGES" = "check" ] && [ -n "$(kul_write_cmd "$SOFTWARE_ROOT/src/freesurfer/bin/recon-all")" ]; then
+        warn "FreeSurfer's official patches modify the system install -- not applied in user mode"
+        KUL_SYSTEM_TODO+=("$0 --only freesurfer --allow-system   # applies the FreeSurfer 8.2.0 patches")
     else
         log "Checking for official FreeSurfer 8.2.0 patches"
         local real_fs_home upd_script="$SOFTWARE_ROOT/tmp/fs820_updates.sh"
@@ -2914,10 +3124,83 @@ section_bashrc() {
     # Shared mode now keeps exactly one copy of the body, in /etc/profile.d,
     # and puts a one-line source shim in /etc/bash.bashrc; the body is written
     # to be re-entrant so the remaining overlap is a no-op.
+    # Written before the block that sources it; see the file's own header.
+    local switch_file="$SOFTWARE_ROOT/etc/kul_env_switch.sh"
+    if [ "$DRY_RUN" -eq 1 ]; then
+        echo "    [dry-run] would write $switch_file (kul_old, and the hand-over from an earlier conda/KUL setup)"
+    else
+        mkdir -p "$SOFTWARE_ROOT/etc"
+        {
+            printf "_KUL_ROOT='%s'\n" "$SOFTWARE_ROOT"
+            cat <<'KULSWITCH'
+# Written by setup_environment.sh and sourced first by its managed block in
+# your shell startup. Makes this install win over another conda/KUL setup that
+# was loaded earlier in the same startup (a shared install's /etc block,
+# another miniforge's conda init), and keeps a copy of what that earlier setup
+# had set, so `kul_old` can bring it back in the current shell.
+_KUL_SNAPSHOT_VARS="PATH LD_LIBRARY_PATH PYTHONPATH CONDA_EXE CONDA_ENVS_DIRS CONDA_PKGS_DIRS \
+SOFTWARE_ROOT CACHE_ROOT XDG_CACHE_HOME PIP_CACHE_DIR TMPDIR APPTAINER_TMPDIR FSLDIR \
+FREESURFER_HOME SUBJECTS_DIR FS_LICENSE FASTSURFER_HOME ANTSPATH KUL_MATLAB_APPS KUL_apps_DIR \
+CUDA_HOME KUL_FSL_SOURCED KUL_FS_SOURCED MAMBA_ROOT_PREFIX"
+
+# Exported, so a nested shell keeps the snapshot of the login environment
+# rather than taking a new one of the already-switched environment.
+if [ -z "${_KUL_PRE_DONE:-}" ]; then
+    for _kul_v in $_KUL_SNAPSHOT_VARS; do
+        if [ -n "${!_kul_v+x}" ]; then
+            export "_KUL_PRE_$_kul_v=${!_kul_v}" "_KUL_PRESET_$_kul_v=1"
+        fi
+    done
+    unset _kul_v
+    export _KUL_PRE_DONE=1
+fi
+
+_kul_drop_conda() {
+    local _i=0
+    while [ "${CONDA_SHLVL:-0}" -gt 0 ] && [ "$_i" -lt 10 ] && type conda >/dev/null 2>&1; do
+        conda deactivate >/dev/null 2>&1 || break
+        _i=$((_i + 1))
+    done
+    unset -f conda mamba __conda_activate __conda_reactivate __conda_hashr __conda_exe \
+        __mamba_exe __mamba_hashr __mamba_xctivate 2>/dev/null
+    unset CONDA_EXE CONDA_PYTHON_EXE CONDA_PREFIX CONDA_DEFAULT_ENV CONDA_PROMPT_MODIFIER \
+        CONDA_SHLVL _CE_M _CE_CONDA MAMBA_EXE MAMBA_ROOT_PREFIX KUL_ENV_SOURCED
+}
+
+if [ -n "${CONDA_EXE:-}" ] && [ "$CONDA_EXE" != "$_KUL_ROOT/miniforge3/bin/conda" ]; then
+    _kul_drop_conda
+fi
+
+# Back to what this shell had before this install's block ran: PATH, the tool
+# variables and, if there was one, the other conda with its base env.
+kul_old() {
+    if [ -z "${_KUL_PRE_DONE:-}" ]; then
+        echo "kul_old: nothing was recorded in this shell" >&2
+        return 1
+    fi
+    _kul_drop_conda
+    local _kul_v _p _s _exe
+    for _kul_v in $_KUL_SNAPSHOT_VARS; do
+        _p="_KUL_PRE_$_kul_v"; _s="_KUL_PRESET_$_kul_v"
+        if [ -n "${!_s:-}" ]; then export "$_kul_v=${!_p}"; else unset "$_kul_v"; fi
+    done
+    hash -r
+    if [ -n "${CONDA_EXE:-}" ] && [ -x "$CONDA_EXE" ]; then
+        _exe="$CONDA_EXE"
+        eval "$("$_exe" shell.bash hook)"
+    fi
+    echo "Earlier setup restored in this shell. New terminals start on $_KUL_ROOT again."
+}
+KULSWITCH
+        } > "$switch_file"
+        chmod 644 "$switch_file"
+    fi
+
     local block_content
     block_content=$(cat <<EOF
 
 $marker
+[ -f "$SOFTWARE_ROOT/etc/kul_env_switch.sh" ] && . "$SOFTWARE_ROOT/etc/kul_env_switch.sh"
 export SOFTWARE_ROOT="$SOFTWARE_ROOT"
 export CACHE_ROOT="$CACHE_ROOT"
 
@@ -2963,7 +3246,7 @@ kul_path_prepend "\$SOFTWARE_ROOT/miniforge3/bin"
 # 'conda' and 'mamba' are shell functions and a child shell does not inherit
 # them. Everything else in this block is idempotent by construction, so only
 # the two expensive hook evals need the guard.
-if [ -z "\${KUL_ENV_SOURCED:-}" ]; then
+if [ "\${KUL_ENV_SOURCED:-}" != "\$SOFTWARE_ROOT" ]; then
     # Confirmed bug (found live): plain 'source .../etc/profile.d/conda.sh' only
     # wires up the 'conda' function -- it does NOT auto-activate base the way a
     # standard 'conda init' setup does, because that auto-activation is baked
@@ -2980,9 +3263,12 @@ if [ -z "\${KUL_ENV_SOURCED:-}" ]; then
     if command -v mamba >/dev/null 2>&1; then
         eval "\$(mamba shell hook --shell bash)"
     fi
-    KUL_ENV_SOURCED=1
+    KUL_ENV_SOURCED="\$SOFTWARE_ROOT"
 fi
 export CONDA_PKGS_DIRS="\$CACHE_ROOT/conda_pkgs"
+# Looked up first by name, ahead of envs_dirs from any condarc (~/.conda/envs
+# and the like stay reachable after it).
+export CONDA_ENVS_DIRS="\$SOFTWARE_ROOT/miniforge3/envs"
 
 # --- Caches / tmp ---
 export XDG_CACHE_HOME="\$CACHE_ROOT/xdg"
@@ -2997,17 +3283,17 @@ export FSLDIR="\$SOFTWARE_ROOT/src/FSL"
 # nested shell is what put the FreeSurfer header on screen more than once per
 # terminal. Everything they set is exported, so once per shell tree is enough;
 # these two flags ARE exported, unlike KUL_ENV_SOURCED above.
-if [ -z "\${KUL_FSL_SOURCED:-}" ] && [ -f "\$FSLDIR/etc/fslconf/fsl.sh" ]; then
+if [ "\${KUL_FSL_SOURCED:-}" != "\$FSLDIR" ] && [ -f "\$FSLDIR/etc/fslconf/fsl.sh" ]; then
     . "\$FSLDIR/etc/fslconf/fsl.sh"
-    export KUL_FSL_SOURCED=1
+    export KUL_FSL_SOURCED="\$FSLDIR"
 fi
 kul_path_prepend "\$FSLDIR/share/fsl/bin"
 
 # --- FreeSurfer ---
 export FREESURFER_HOME="\$SOFTWARE_ROOT/src/freesurfer"
-if [ -z "\${KUL_FS_SOURCED:-}" ] && [ -f "\$FREESURFER_HOME/SetUpFreeSurfer.sh" ]; then
+if [ "\${KUL_FS_SOURCED:-}" != "\$FREESURFER_HOME" ] && [ -f "\$FREESURFER_HOME/SetUpFreeSurfer.sh" ]; then
     . "\$FREESURFER_HOME/SetUpFreeSurfer.sh"
-    export KUL_FS_SOURCED=1
+    export KUL_FS_SOURCED="\$FREESURFER_HOME"
 fi
 export SUBJECTS_DIR="\$FREESURFER_HOME/subjects"
 export FS_LICENSE="\$FREESURFER_HOME/license.txt"
@@ -3163,6 +3449,11 @@ this script only adds its own managed block below."
     for f in "${KUL_BLOCK_ALL_DESTS[@]}"; do
         kul_in_list "$f" "${dests[@]}" && continue
         kul_block_present_in "$f" || continue
+        if [ "$INSTALL_MODE" = "user" ] && kul_in_list "$f" "${KUL_BLOCK_SHARED_DESTS[@]}"; then
+            warn "Leaving the shared install's block in $f as is (other accounts use it); your \
+~/.bashrc block runs after it and takes precedence for you"
+            continue
+        fi
         warn "Removing stale managed block from $f (this install is '$INSTALL_MODE' mode)"
         if [ "$DRY_RUN" -eq 1 ]; then
             echo "    [dry-run] would remove the managed block from $f"
@@ -3613,7 +3904,18 @@ run 'sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restar
     # verified perfectly clean while every shell sourced FreeSurfer and FSL
     # three times over. Scan all known locations and treat an unexpected count
     # as a failure, not a pass.
-    _found_blocks="$(kul_block_locations)"
+    # Another install's block (a shared install on a server this account uses)
+    # is not a duplicate of this one; count only blocks for this root.
+    _found_blocks=""
+    while IFS= read -r _f; do
+        [ -z "$_f" ] && continue
+        _r="$(kul_block_root "$_f")"
+        if [ -n "$_r" ] && [ "$_r" != "$SOFTWARE_ROOT" ]; then
+            vok "$_f" "block of another install ($_r), not this one; left as is"
+        else
+            _found_blocks="${_found_blocks}${_f}"$'\n'
+        fi
+    done < <(kul_block_locations)
     _n_blocks=$(printf '%s\n' "$_found_blocks" | grep -c . || true)
     _expected_blocks=1
     [ "$INSTALL_MODE" = "shared" ] && _expected_blocks=2   # body in profile.d + shim in bash.bashrc
@@ -3651,6 +3953,55 @@ run 'sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restar
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
+# User mode's stand-in for a system-wide section: report what is there, list
+# what an admin would need to do, change nothing.
+section_system_check() {
+    local name="$1" pkg missing=""
+    log "Checking '$name' (system-wide, so user mode only checks it; --allow-system runs it)"
+    case "$name" in
+        apt)
+            for pkg in $(apt_core_pkgs); do
+                dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q "ok installed" || missing="$missing $pkg"
+            done
+            if [ -z "$missing" ]; then
+                ok "all core apt packages are installed"
+            else
+                warn "not installed:$missing"
+                KUL_SYSTEM_TODO+=("sudo apt-get install -y$missing")
+            fi
+            ;;
+        docker)
+            if have docker && docker info >/dev/null 2>&1; then
+                ok "Docker is installed and usable from this account"
+            elif have docker; then
+                warn "Docker is installed, but this account cannot use it (not in the docker group?)"
+                KUL_SYSTEM_TODO+=("sudo usermod -aG docker $(whoami)")
+            else
+                warn "Docker is not installed"
+                KUL_SYSTEM_TODO+=("$0 --only docker --allow-system")
+            fi
+            ;;
+        nvidia)
+            if have nvidia-smi && nvidia-smi >/dev/null 2>&1; then
+                ok "NVIDIA driver $(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1)"
+            else
+                warn "no working NVIDIA driver (GPU steps will fall back to CPU or fail)"
+            fi
+            ;;
+        apptainer)
+            if have apptainer; then ok "$(apptainer --version 2>&1)"
+            elif have singularity; then ok "$(singularity --version 2>&1)"
+            else warn "Apptainer/Singularity is not installed"; KUL_SYSTEM_TODO+=("$0 --only apptainer --allow-system"); fi
+            ;;
+        *)
+            local cmd
+            case "$name" in vscode) cmd=code ;; r) cmd=R ;; awscli) cmd=aws ;; *) cmd="$name" ;; esac
+            if have "$cmd"; then ok "$name present ($(command -v "$cmd"))"
+            else warn "$name is not installed"; KUL_SYSTEM_TODO+=("$0 --only $name --allow-system"); fi
+            ;;
+    esac
+}
+
 maybe_run_section() {
     local name="$1" flag_var="$2" func="$3"
     if ! section_enabled "$name"; then
@@ -3658,7 +4009,12 @@ maybe_run_section() {
     fi
     if [ "${!flag_var}" -eq 1 ]; then
         echo
-        "$func"
+        # shellcheck disable=SC2086
+        if [ "$KUL_SYSTEM_CHANGES" = "check" ] && kul_in_list "$name" $KUL_SYSTEM_SECTIONS; then
+            section_system_check "$name"
+        else
+            "$func"
+        fi
     else
         warn "Skipping '$name' (disabled by config — set $flag_var=1 to enable)"
     fi
@@ -3698,6 +4054,12 @@ maybe_run_section rstudio          DO_RSTUDIO             section_rstudio
 maybe_run_section afni             DO_AFNI                section_afni
 maybe_run_section docker-images    DO_DOCKER_IMAGES       section_docker_images
 maybe_run_section bashrc           DO_BASHRC              section_bashrc
+
+if [ "${#KUL_SYSTEM_TODO[@]}" -gt 0 ]; then
+    echo
+    warn "Not done, because it changes this machine for every account (user mode). For an admin:"
+    for _kul_t in "${KUL_SYSTEM_TODO[@]}"; do echo "       $_kul_t"; done
+fi
 
 echo
 log "Done. Manual steps this script cannot do for you:"
