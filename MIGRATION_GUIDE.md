@@ -71,7 +71,7 @@ pip install -e . --no-deps
 ## KarawunDev — **the default since Aug 2026**
 - Python 3.14
 - `karawun` — editable install of the KUL fork, `github.com/Rad-dude/karawun.git`,
-  branch `kul-extended-palette`, commit `72bbc955`
+  branch `kul-extended-palette`, commit `bfd3da71`
 - `dcm2bids` >= 3.1
 
 ```bash
@@ -79,7 +79,7 @@ mamba create -n KarawunDev python=3.14 -y
 mamba activate KarawunDev
 pip install 'dcm2bids>=3.1'
 git clone -b kul-extended-palette https://github.com/Rad-dude/karawun.git
-cd karawun && git checkout 72bbc9558c139678a423b2ee43fbb134d656328c
+cd karawun && git checkout bfd3da710eb610abd575d7ad0170f9fde787f1f2
 pip install -e .
 ```
 

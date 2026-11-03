@@ -121,13 +121,13 @@ likely give you a *different and possibly incompatible* version.
 
 | Repo | Remote | Branch | Commit | Notes |
 |---|---|---|---|---|
-| KUL_NIS | `treanus/KUL_NIS.git` | `KUL_NIS_v2.0_20260701` | `f92cc02f` | Not `main` — this dev branch |
-| KUL_VBG | `KUL-Radneuron/KUL_VBG.git` | `KUL_VBG_2.0` | `44aafd1f` | v2.0 rewrite branch |
+| KUL_NIS | `treanus/KUL_NIS.git` | `KUL_NIS_v2.0_20260701` | `205a3e28` | Not `main` — this dev branch |
+| KUL_VBG | `KUL-Radneuron/KUL_VBG.git` | `KUL_VBG_2.0` | `da975a09` | v2.0 rewrite branch |
 | KUL_FWT | `KUL-Radneuron/KUL_FWT.git` | `KUL_FWT_v2.0` | `7c422a89` | v2.0 rewrite branch |
 | LoRE-SD | `SiebeLeysen/LoRE-SD.git` | `mrtrix_module` | tracks branch tip (was `4d259c7e` at last check, now past that — not commit-pinned like the rows below) | **Not `main`**. Despite the branch name, it's installed as a regular editable pip package (`setup.py` + pybind11/nlopt/cmake in its own `lore_sd` conda env), not an MRtrix3 external-module build — see `MIGRATION_GUIDE.md`'s `lore_sd` entry |
 | scilpy | `scilus/scilpy.git` | (detached, dev) | `b2bf4ac9` | 176 commits past tag `2.2.2` — pip installed editable |
 | HD-BET | `MIC-DKFZ/HD-BET` | `master` | `678e44d5` | 4 commits past tag `v2.0.1` (docs only, harmless) |
-| karawun | `Rad-dude/karawun.git` | `kul-extended-palette` | `72bbc955` | **KUL fork, required.** Forked from the real upstream `DevelopmentalImagingMCRI/karawun` (*not* `treanus/karawun`, a personal fork frozen since 2021 and long superseded). Extends the colour palette 31 → 64 entries, append-only: indices 0-30 stay byte-identical, so existing scenes are unaffected. Without it `lookup_cie()` clamps every index above 30, and all fMRI activation labels render in one colour, colliding with the tracts |
+| karawun | `Rad-dude/karawun.git` | `kul-extended-palette` | `bfd3da71` | **KUL fork, required.** Forked from the real upstream `DevelopmentalImagingMCRI/karawun` (*not* `treanus/karawun`, a personal fork frozen since 2021 and long superseded). Extends the colour palette 31 → 64 entries, append-only: indices 0-30 stay byte-identical, so existing scenes are unaffected. Without it `lookup_cie()` clamps every index above 30, and all fMRI activation labels render in one colour, colliding with the tracts |
 | mrtrix3 | `Rad-dude/mrtrix3.git` | `fix/mrconvert-direct-io-arg-binding` | `5a643594` | **KUL fork, required.** Upstream `dev` plus one fix: `dwifslpreproc` built the `mrconvert` call that crops the eddy field map as a plain string instead of an f-string, so `{}` placeholders were never interpolated and `mrconvert` got three positional args instead of two — a hard failure on every run reaching that path. Revert to `MRtrix3/mrtrix3` `dev` once merged. See §5 for the build |
 
 ```bash
@@ -139,7 +139,7 @@ git clone https://github.com/KUL-Radneuron/KUL_FWT.git && cd KUL_FWT && git chec
 git clone https://github.com/SiebeLeysen/LoRE-SD.git && cd LoRE-SD && git checkout mrtrix_module && cd ..
 git clone https://github.com/scilus/scilpy.git && cd scilpy && git checkout b2bf4ac95ab3dfbb622dfdb586988123ef88475e && cd ..
 git clone https://github.com/MIC-DKFZ/HD-BET.git && cd HD-BET && git checkout 678e44d546a84de0f2a7fc245f176b82b7d912fd && cd ..
-git clone -b kul-extended-palette https://github.com/Rad-dude/karawun.git && cd karawun && git checkout 72bbc9558c139678a423b2ee43fbb134d656328c && cd ..
+git clone -b kul-extended-palette https://github.com/Rad-dude/karawun.git && cd karawun && git checkout bfd3da710eb610abd575d7ad0170f9fde787f1f2 && cd ..
 git clone -b fix/mrconvert-direct-io-arg-binding https://github.com/Rad-dude/mrtrix3.git && cd mrtrix3 && git checkout 5a643594b0c0dae60f09e62cd6b1c56314a19354 && cd ..
 ```
 

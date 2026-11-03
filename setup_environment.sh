@@ -182,7 +182,7 @@ SCILPY_COMMIT="77246ca256e6b55927a8d9512f7e605ec0eb5bd5"   # b2bf4ac9 (176 past 
 HDBET_COMMIT="678e44d546a84de0f2a7fc245f176b82b7d912fd"    # 4 commits past tag v2.0.1
 KARAWUN_REPO="https://github.com/Rad-dude/karawun.git"
 KARAWUN_BRANCH="kul-extended-palette"
-KARAWUN_COMMIT="72bbc9558c139678a423b2ee43fbb134d656328c"
+KARAWUN_COMMIT="bfd3da710eb610abd575d7ad0170f9fde787f1f2"
 KARAWUN_STOCK_VERSION="0.2.5.4"           # --karawun-stock: plain conda-forge package, no git clone
                                                              # KUL fork of DevelopmentalImagingMCRI/karawun
                                                              # (the real upstream -- NOT treanus/karawun,
