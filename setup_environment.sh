@@ -1310,9 +1310,17 @@ mamba_bin() { echo "$SOFTWARE_ROOT/miniforge3/bin/mamba"; }
 # precedence over the invoked binary's own location. Calling the target env's
 # binary directly by its own full, unambiguous path sidesteps that entirely.
 env_bin() { echo "$SOFTWARE_ROOT/miniforge3/envs/$1/bin/$2"; }
+# Same reasoning for creating, inspecting and testing for our envs: always by
+# full prefix, never by -n <name>. A name is placed in the first writable
+# envs_dirs entry, and pinning MAMBA_ROOT_PREFIX does not override envs_dirs
+# from ~/.condarc or CONDA_ENVS_PATH / CONDA_ENVS_DIRS (checked with mamba
+# 2.9). On a machine with any of those set, `mamba create -n hd-bet-env`
+# succeeded but built the env elsewhere, so the env_bin pip call right after
+# it failed with "No such file or directory".
+env_prefix() { echo "$SOFTWARE_ROOT/miniforge3/envs/$1"; }
 
 env_exists() {
-    "$(conda_bin)" env list 2>/dev/null | awk '{print $1}' | grep -qx "$1"
+    [ -d "$(env_prefix "$1")/conda-meta" ]
 }
 
 # ── 3b. dcm2bids env (dcm2niix + dcm2bids — core dependency, README lists both ──
@@ -1339,7 +1347,7 @@ section_env_dcm2bids() {
     log "Installing dcm2niix + dcm2bids >=3.1 into the miniforge base env — any recent 3.x \
 satisfies KUL_NIS's requirement per SOFTWARE_ROOT_SETUP.md; config schema only changes at the \
 v2->v3 boundary"
-    run "$(mamba_bin) install -n base -c conda-forge dcm2niix -y"
+    run "$(mamba_bin) install -p '$SOFTWARE_ROOT/miniforge3' -c conda-forge dcm2niix -y"
     run "'$SOFTWARE_ROOT/miniforge3/bin/pip' install 'dcm2bids>=3.1'"
     ok "dcm2niix/dcm2bids ready in base (used by KUL_dcm2bids.sh, KUL_dcm2bids_new.sh, \
 KUL_multisubjects_dcm2bids.sh)"
@@ -1386,7 +1394,7 @@ section_env_scilpy() {
     fi
     log "Creating 'scilpy' env (python 3.12, KUL fork $SCILPY_BRANCH @ $SCILPY_COMMIT \
 — v2.3.0 base plus three upstream bugfixes)"
-    run "$(mamba_bin) create -n scilpy python=3.12 -y"
+    run "$(mamba_bin) create -p '$(env_prefix scilpy)' python=3.12 -y"
     run "'$(env_bin scilpy pip)' install scilpy==2.3.0"
     run "'$(env_bin scilpy pip)' uninstall scilpy -y"
     _ensure_pinned_checkout "$dest" "$SCILPY_REPO" "$SCILPY_BRANCH" "$SCILPY_COMMIT"
@@ -1420,7 +1428,7 @@ section_env_hdbet() {
         fi
     fi
     log "Creating 'hd-bet-env' (python 3.10, torch 2.6, HD-BET $HDBET_COMMIT)"
-    run "$(mamba_bin) create -n hd-bet-env python=3.10 -y"
+    run "$(mamba_bin) create -p '$(env_prefix hd-bet-env)' python=3.10 -y"
     _ensure_pinned_checkout "$dest" "https://github.com/MIC-DKFZ/HD-BET.git" "" "$HDBET_COMMIT"
     # Install HD-BET and torch together in one resolver pass, with the CUDA (or
     # CPU) wheel index as primary and PyPI as extra. Doing this as two separate
@@ -1628,7 +1636,7 @@ section_env_hdglio() {
     local need_create=1
     if env_exists hdglio; then
         local installed_ver
-        installed_ver=$("$(mamba_bin)" list -n hdglio hd-glio 2>/dev/null | awk '$1=="hd-glio"{print $2}')
+        installed_ver=$("$(mamba_bin)" list -p "$(env_prefix hdglio)" hd-glio 2>/dev/null | awk '$1=="hd-glio"{print $2}')
         if [ "$installed_ver" = "2.0" ]; then
             ok "conda env 'hdglio' already exists at the pinned hd-glio version ($installed_ver)"
             need_create=0
@@ -1641,7 +1649,7 @@ section_env_hdglio() {
     fi
     if [ "$need_create" -eq 1 ]; then
         log "Creating 'hdglio' env (python 3.9, torch 1.13.1, nnunet 1.6.4, hd-glio 2.0, HD-BET 1.0)"
-        run "$(mamba_bin) create -n hdglio python=3.9 -y"
+        run "$(mamba_bin) create -p '$(env_prefix hdglio)' python=3.9 -y"
 
         # One pip call, one resolver pass, for the reason documented in
         # section_env_hdbet: splitting it lets a later unconstrained 'torch'
@@ -1736,7 +1744,7 @@ section_env_resseg() {
         return
     fi
     log "Creating 'resseg' env (python 3.8, resseg 0.3.7, antspyx 0.4.2)"
-    run "$(mamba_bin) create -n resseg python=3.8 -y"
+    run "$(mamba_bin) create -p '$(env_prefix resseg)' python=3.8 -y"
     # Pin simpleitk to the last version with a cp38 manylinux wheel before installing
     # resseg/antspyx -- torchio (a resseg dependency) allows any simpleitk!=2.0.*,!=2.1.1.1
     # and pip's resolver otherwise picks the latest (2.5.5+), which has no cp38 wheel and
@@ -1767,7 +1775,7 @@ section_env_karawun() {
             fi
         fi
         log "Creating 'KarawunDev' (editable install, karawun $KARAWUN_COMMIT + dcm2bids 3.1.1)"
-        run "$(mamba_bin) create -n KarawunDev python=3.14 -y"
+        run "$(mamba_bin) create -p '$(env_prefix KarawunDev)' python=3.14 -y"
         run "'$(env_bin KarawunDev pip)' install dcm2bids>=3.1"
         _ensure_pinned_checkout "$dest" "$KARAWUN_REPO" "$KARAWUN_BRANCH" "$KARAWUN_COMMIT"
         run "cd '$dest' && '$(env_bin KarawunDev pip)' install -e ."
@@ -1775,7 +1783,7 @@ section_env_karawun() {
     else
         if env_exists KarawunEnv; then
             local installed_ver
-            installed_ver=$("$(mamba_bin)" list -n KarawunEnv karawun 2>/dev/null | awk '$1=="karawun"{print $2}')
+            installed_ver=$("$(mamba_bin)" list -p "$(env_prefix KarawunEnv)" karawun 2>/dev/null | awk '$1=="karawun"{print $2}')
             if [ "$installed_ver" = "$KARAWUN_STOCK_VERSION" ]; then
                 ok "conda env 'KarawunEnv' already exists at the pinned version ($installed_ver)"
                 return
@@ -1787,7 +1795,7 @@ section_env_karawun() {
             fi
         fi
         log "Creating 'KarawunEnv' (plain conda-forge package, no git clone needed)"
-        run "$(mamba_bin) create -n KarawunEnv python=3.8 karawun=$KARAWUN_STOCK_VERSION -c conda-forge -y"
+        run "$(mamba_bin) create -p '$(env_prefix KarawunEnv)' python=3.8 karawun=$KARAWUN_STOCK_VERSION -c conda-forge -y"
         ok "KarawunEnv ready (used by KUL_karawun_prepare.sh / KUL_karawun2brainlab.sh)"
         warn "KarawunEnv (v$KARAWUN_STOCK_VERSION) will silently corrupt output DICOMs given an Enhanced/multi-frame donor (e.g. Philips) -- re-run with --karawun-dev if that's a possibility at your site"
     fi
@@ -1887,8 +1895,8 @@ section_env_pyfmri() {
     # clone+remove rather than re-downloading/re-resolving everything.
     if env_exists rsfmri_env; then
         log "Found legacy env 'rsfmri_env' — renaming to 'pyfMRI' (clone + remove)"
-        run "$(mamba_bin) create -n pyfMRI --clone rsfmri_env -y"
-        run "$(mamba_bin) env remove -n rsfmri_env -y"
+        run "$(mamba_bin) create -p '$(env_prefix pyfMRI)' --clone '$(env_prefix rsfmri_env)' -y"
+        run "$(mamba_bin) env remove -p '$(env_prefix rsfmri_env)' -y"
         ok "'rsfmri_env' migrated to 'pyfMRI'"
         return
     fi
@@ -1897,7 +1905,7 @@ shared by KUL_run_rsfMRI_networks.sh and KUL_fmriproc_nilearn_new.sh, both of wh
 hardcode this env name; no hardcoded version pins upstream, so this creates \
 everything fresh together in one resolver pass to avoid ABI drift between \
 packages installed piecemeal over time)"
-    run "$(mamba_bin) create -n pyfMRI -c conda-forge python=3.10 nilearn nibabel numpy scipy pandas matplotlib pyyaml -y"
+    run "$(mamba_bin) create -p '$(env_prefix pyfMRI)' -c conda-forge python=3.10 nilearn nibabel numpy scipy pandas matplotlib pyyaml -y"
     ok "pyfMRI ready — used automatically by KUL_run_rsfMRI_networks.sh and KUL_fmriproc_nilearn_new.sh"
 }
 
@@ -1917,7 +1925,7 @@ section_env_dicom() {
     # run before (or without) KUL_NIS being cloned.
     log "Creating 'KUL_dicom' (SimpleITK/Pillow/numpy/pydicom — used by KUL_nii2dcm.py, \
 the NIfTI/PNG -> DICOM step behind KUL_clinical_fmridti.sh -R)"
-    run "$(mamba_bin) create -n KUL_dicom -c conda-forge 'python>=3.10' 'simpleitk>=2.2' \
+    run "$(mamba_bin) create -p '$(env_prefix KUL_dicom)' -c conda-forge 'python>=3.10' 'simpleitk>=2.2' \
 'pillow>=9.1' 'numpy>=1.24' 'pydicom>=2.3' -y"
     ok "KUL_dicom ready — found automatically via \$KUL_DICOM_ENV; override with KUL_clinical_fmridti.sh -m"
 }
@@ -2029,8 +2037,8 @@ section_env_lore_sd() {
     local dest="$SOFTWARE_ROOT/src/LoRE-SD"
     [ -d "$dest" ] || run "git clone --branch mrtrix_module https://github.com/SiebeLeysen/LoRE-SD.git '$dest'"
     log "Creating 'lore_sd' env (python 3.10, nlopt/cmake/compilers via conda-forge, editable pip install)"
-    run "$(mamba_bin) create -n lore_sd python=3.10 -y"
-    run "$(mamba_bin) install -n lore_sd -c conda-forge nlopt cmake compilers -y"
+    run "$(mamba_bin) create -p '$(env_prefix lore_sd)' python=3.10 -y"
+    run "$(mamba_bin) install -p '$(env_prefix lore_sd)' -c conda-forge nlopt cmake compilers -y"
     run "'$(env_bin lore_sd pip)' install pybind11 numpy setuptools wheel"
     run "cd '$dest' && '$(env_bin lore_sd pip)' install -e . --no-build-isolation"
     ok "lore_sd env ready — lore_dwi2decomposition / lore_decomposition2contrast available in it \
