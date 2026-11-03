@@ -128,7 +128,7 @@ likely give you a *different and possibly incompatible* version.
 | scilpy | `scilus/scilpy.git` | (detached, dev) | `b2bf4ac9` | 176 commits past tag `2.2.2` — pip installed editable |
 | HD-BET | `MIC-DKFZ/HD-BET` | `master` | `678e44d5` | 4 commits past tag `v2.0.1` (docs only, harmless) |
 | karawun | `Rad-dude/karawun.git` | `kul-extended-palette` | `bfd3da71` | **KUL fork, required.** Forked from the real upstream `DevelopmentalImagingMCRI/karawun` (*not* `treanus/karawun`, a personal fork frozen since 2021 and long superseded). Extends the colour palette 31 → 64 entries, append-only: indices 0-30 stay byte-identical, so existing scenes are unaffected. Without it `lookup_cie()` clamps every index above 30, and all fMRI activation labels render in one colour, colliding with the tracts |
-| mrtrix3 | `Rad-dude/mrtrix3.git` | `fix/mrconvert-direct-io-arg-binding` | `5a643594` | **KUL fork, required.** Upstream `dev` plus one fix: `dwifslpreproc` built the `mrconvert` call that crops the eddy field map as a plain string instead of an f-string, so `{}` placeholders were never interpolated and `mrconvert` got three positional args instead of two — a hard failure on every run reaching that path. Revert to `MRtrix3/mrtrix3` `dev` once merged. See §5 for the build |
+| mrtrix3 | `Rad-dude/mrtrix3.git` | `fix/mrconvert-direct-io-arg-binding` | `1a6a62b5` | **KUL fork, required.** Upstream `dev` plus one fix: `dwifslpreproc` built the `mrconvert` call that crops the eddy field map as a plain string instead of an f-string, so `{}` placeholders were never interpolated and `mrconvert` got three positional args instead of two — a hard failure on every run reaching that path. Revert to `MRtrix3/mrtrix3` `dev` once merged. See §5 for the build |
 
 ```bash
 cd /mnt/DATA1/aradwa0/software/src
@@ -140,7 +140,7 @@ git clone https://github.com/SiebeLeysen/LoRE-SD.git && cd LoRE-SD && git checko
 git clone https://github.com/scilus/scilpy.git && cd scilpy && git checkout b2bf4ac95ab3dfbb622dfdb586988123ef88475e && cd ..
 git clone https://github.com/MIC-DKFZ/HD-BET.git && cd HD-BET && git checkout 678e44d546a84de0f2a7fc245f176b82b7d912fd && cd ..
 git clone -b kul-extended-palette https://github.com/Rad-dude/karawun.git && cd karawun && git checkout bfd3da710eb610abd575d7ad0170f9fde787f1f2 && cd ..
-git clone -b fix/mrconvert-direct-io-arg-binding https://github.com/Rad-dude/mrtrix3.git && cd mrtrix3 && git checkout 5a643594b0c0dae60f09e62cd6b1c56314a19354 && cd ..
+git clone -b fix/mrconvert-direct-io-arg-binding https://github.com/Rad-dude/mrtrix3.git && cd mrtrix3 && git checkout 1a6a62b550d8ecb6d9bc4b5a2c1692adabb05e1c && cd ..
 ```
 
 For the conda envs that use these editable (scilpy, HD-BET, karawun-dev), see
@@ -155,7 +155,7 @@ For the conda envs that use these editable (scilpy, HD-BET, karawun-dev), see
 ### mrtrix3 — pinned to a KUL fork of `dev`, built with CMake
 
 Currently running: **`Rad-dude/mrtrix3`, branch
-`fix/mrconvert-direct-io-arg-binding`, commit `5a643594`.**
+`fix/mrconvert-direct-io-arg-binding`, commit `1a6a62b5`.**
 
 This is upstream `dev` plus a single fix: `dwifslpreproc` built the `mrconvert`
 call that crops the eddy-derived field map as a plain string rather than an
@@ -219,7 +219,7 @@ at run time. On Ubuntu 24.04+ the Qt5 plugin package is `libqt5gui5t64` (plain
 ```bash
 git clone -b fix/mrconvert-direct-io-arg-binding https://github.com/Rad-dude/mrtrix3.git
 cd mrtrix3
-git checkout 5a643594b0c0dae60f09e62cd6b1c56314a19354
+git checkout 1a6a62b550d8ecb6d9bc4b5a2c1692adabb05e1c
 # Qt6 (preferred):
 cmake -B build -GNinja \
     -DCMAKE_INSTALL_PREFIX="$(pwd)" \

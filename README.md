@@ -70,7 +70,7 @@ pipelines require, and both are pinned to explicit commits:
 
 | | repo | branch | commit |
 |---|---|---|---|
-| mrtrix3 | `Rad-dude/mrtrix3` | `fix/mrconvert-direct-io-arg-binding` | `5a643594` |
+| mrtrix3 | `Rad-dude/mrtrix3` | `fix/mrconvert-direct-io-arg-binding` | `1a6a62b5` |
 | karawun | `Rad-dude/karawun` | `kul-extended-palette` | `bfd3da71` |
 
 The mrtrix3 branch restores a missing f-string prefix in `dwifslpreproc`, without

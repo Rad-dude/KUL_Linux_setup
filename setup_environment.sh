@@ -124,7 +124,7 @@ NCPU="${NCPU:-$(nproc)}"
 # against, not necessarily the latest upstream.
 MRTRIX3_REPO="https://github.com/Rad-dude/mrtrix3.git"
 MRTRIX3_BRANCH="fix/mrconvert-direct-io-arg-binding"
-MRTRIX3_COMMIT="5a643594b0c0dae60f09e62cd6b1c56314a19354"
+MRTRIX3_COMMIT="1a6a62b550d8ecb6d9bc4b5a2c1692adabb05e1c"
                                            # KUL fork of the dev branch. The branch carries one fix on
                                            # top of upstream dev: dwifslpreproc built the mrconvert call
                                            # that crops the eddy-derived field map as a plain string
